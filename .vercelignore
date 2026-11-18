@@ -1,0 +1,14 @@
+# CLI deploys of push-retner upload only what the backend needs.
+/*
+!/api
+!/backend
+!/public
+!/package.json
+!/package-lock.json
+!/vercel.json
+
+# Never upload secrets or local junk from inside backend/
+/backend/.env*
+/backend/.vercel
+/backend/*.txt
+/backend/*.bak
