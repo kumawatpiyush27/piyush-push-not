@@ -985,7 +985,7 @@ async function sendCampaign(ctx, store, camp, { btn1Text, btn1Url, btn2Text, btn
     const payload = {
         title: camp.title,
         body: camp.message,
-        icon: storeIcon(store),
+        icon: isHttpsUrl(camp.icon) ? camp.icon : storeIcon(store),
         url: mainUrl,
         data: { id: camp.id, url: mainUrl, type: camp.type || 'regular', expiryAt: camp.expiry_at || null },
         actions,

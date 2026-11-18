@@ -12,6 +12,8 @@ const { Pool } = require('pg');
 const automations = require('./automations');
 const auth = require('./auth');
 const { SERVICE_WORKER_SOURCE } = require('./sw-source');
+const media = require('./media');
+const analytics = require('./analytics');
 
 const app = express();
 
@@ -332,8 +334,12 @@ app.get('/track-click', async (req, res) => {
     if (!/^https?:$/.test(target.protocol)) return res.status(400).send('Invalid link');
 
     if (c && automations.verifyCampaignClick(c, url, req.query.s)) {
-        getPool().query('UPDATE campaigns SET clicks = COALESCE(clicks, 0) + 1 WHERE id = $1', [parseInt(c, 10)])
-            .catch((e) => console.error('Click tracking error:', e.message));
+        const cid = parseInt(c, 10);
+        const db = getPool();
+        Promise.all([
+            db.query('UPDATE campaigns SET clicks = COALESCE(clicks, 0) + 1 WHERE id = $1', [cid]),
+            db.query('INSERT INTO push_campaign_clicks (campaign_id, store_id) SELECT id, store_id FROM campaigns WHERE id = $1', [cid]),
+        ]).catch((e) => console.error('Click tracking error:', e.message));
         return res.redirect(302, url);
     }
     const safe = target.toString().replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
@@ -352,6 +358,25 @@ app.get('/n/c', async (req, res) => {
     }
     try { await automations.recordClick(getPool(), logId); } catch (e) { console.error('Automation click error:', e.message); }
     res.redirect(302, url);
+});
+
+// Uploaded images (campaign images, icons, logos). Public on purpose: push
+// services and shoppers' browsers download them. Ids are unguessable hashes.
+app.get('/m/:file', async (req, res) => {
+    const m = String(req.params.file).match(/^([a-f0-9]{32})[.](jpg|png|webp)$/);
+    if (!m) return res.status(404).send('Not found');
+    try {
+        const img = await media.loadImage(getPool(), m[1]);
+        if (!img) return res.status(404).send('Not found');
+        res.set('Content-Type', img.mime);
+        res.set('Cache-Control', 'public, max-age=31536000, immutable');
+        res.set('CDN-Cache-Control', 'public, max-age=31536000, immutable');
+        res.set('X-Content-Type-Options', 'nosniff');
+        res.send(img.bytes);
+    } catch (e) {
+        console.error('Image serve error:', e.message);
+        res.status(500).send('Error');
+    }
 });
 
 app.get('/api/vapid-public-key', (req, res) => {
@@ -1678,6 +1703,47 @@ app.get('/store-admin', async (req, res) => {
 // taken from the session token (see auth.requireStore).
 app.use('/my-store', auth.requireStore);
 
+// Image upload: raw JPG/PNG/WebP body (the dashboard resizes it first).
+app.post('/my-store/media', express.raw({ type: ['image/jpeg', 'image/png', 'image/webp'], limit: '2560kb' }), async (req, res) => {
+    try {
+        if (!Buffer.isBuffer(req.body) || !req.body.length) {
+            return res.status(400).json({ success: false, error: 'Only JPG, PNG and WebP images are supported.' });
+        }
+        const result = await media.saveImage(getPool(), req.storeId, req.body, String(req.query.purpose || ''));
+        if (!result.ok) return res.status(400).json({ success: false, error: result.error });
+        res.json({ success: true, url: result.url, width: result.width, height: result.height, size: result.size });
+    } catch (e) {
+        console.error('Upload error:', e.message);
+        res.status(500).json({ success: false, error: 'Upload failed. Please try again.' });
+    }
+});
+
+// Analytics, cart recovery list and live event feed (all scoped to the session store).
+app.get('/my-store/analytics', async (req, res) => {
+    try {
+        res.json({ success: true, ...(await analytics.getAnalytics(getPool(), req.storeId, { days: req.query.days, tz: req.query.tz })) });
+    } catch (e) {
+        console.error('Analytics error:', e.message);
+        res.status(500).json({ success: false, error: 'Could not load analytics.' });
+    }
+});
+app.get('/my-store/carts', async (req, res) => {
+    try {
+        res.json({ success: true, carts: await analytics.getCarts(getPool(), req.storeId, { status: req.query.status, before: req.query.before, limit: req.query.limit }) });
+    } catch (e) {
+        console.error('Carts error:', e.message);
+        res.status(500).json({ success: false, error: 'Could not load carts.' });
+    }
+});
+app.get('/my-store/events', async (req, res) => {
+    try {
+        res.json({ success: true, events: await analytics.getEvents(getPool(), req.storeId, { type: req.query.type, before: req.query.before, limit: req.query.limit }) });
+    } catch (e) {
+        console.error('Events error:', e.message);
+        res.status(500).json({ success: false, error: 'Could not load events.' });
+    }
+});
+
 // Stats API
 app.get('/my-store/stats', async (req, res) => {
     const storeId = req.storeId; // from the session token
@@ -1782,17 +1848,18 @@ app.post('/webhooks/shopify/checkouts', verifyShopifyWebhook, async (req, res) =
 // Broadcast API
 app.post('/my-store/broadcast', async (req, res) => {
     const storeId = req.storeId;
-    const { title, message, url, image, type, scheduledAt, expiryAt, btn1Text, btn1UrlRaw, btn2Text, btn2UrlRaw } = req.body || {};
+    const { title, message, url, image, icon, type, scheduledAt, expiryAt, btn1Text, btn1UrlRaw, btn2Text, btn2UrlRaw } = req.body || {};
     try {
         if (!title || !message) return res.status(400).json({ success: false, error: 'Title and message are required.' });
         const db = getPool();
 
         // Insert the campaign first: its id is used for click/revenue tracking.
         const insertResult = await db.query(
-            `INSERT INTO campaigns (store_id, title, message, url, image, status, type, scheduled_at, expiry_at, sent_count, created_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 0, NOW()) RETURNING *`,
+            `INSERT INTO campaigns (store_id, title, message, url, image, icon, status, type, scheduled_at, expiry_at, sent_count, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 0, NOW()) RETURNING *`,
             [storeId, String(title).slice(0, 120), String(message).slice(0, 500), url || null,
-             (image && !String(image).startsWith('data:')) ? image : null,
+             (image && String(image).startsWith('https://') && String(image).length < 500) ? image : null,
+             (icon && String(icon).startsWith('https://') && String(icon).length < 500) ? icon : null,
              scheduledAt ? 'scheduled' : 'sending', type || 'regular', scheduledAt || null, expiryAt || null]
         );
         const camp = insertResult.rows[0];
