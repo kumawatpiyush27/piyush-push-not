@@ -531,8 +531,8 @@ app.get('/store-admin', async (req, res) => {
         .btn-sm { font-size: 12px; padding: 4px 8px; }
 
     </style>
-    <link rel="stylesheet" href="/css/automations.css?v=1">
-    <script src="/js/automations.js?v=1" defer></script>
+    <link rel="stylesheet" href="/css/automations.css?v=2">
+    <script src="/js/automations.js?v=2" defer></script>
 </head>
 <body>
 
@@ -2168,6 +2168,7 @@ app.get('/privacy', (req, res) => {
                 <li>Device type (Desktop/Mobile)</li>
                 <li>Browser language settings</li>
                 <li>Shopping activity on the merchant's store linked only to the anonymous push subscription: products viewed, cart contents and last visit time</li>
+                <li>If the merchant turns on order detection: completed-order events from Shopify's checkout pixel (order ID, order total and purchased products), linked only to the anonymous push subscription. No names, emails, phone numbers or addresses are collected.</li>
             </ul>
 
             <h2>2. How We Use Your Information</h2>

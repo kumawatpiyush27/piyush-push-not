@@ -47,6 +47,38 @@
       ],
       vars: ['store_name', 'discount_code'],
     },
+    price_drop: {
+      name: 'Price drop',
+      icon: 'fa-tag',
+      desc: 'Tell shoppers when a product they viewed gets cheaper.',
+      how: [
+        'We check the products your subscribers viewed about once an hour.',
+        'When the price drops by at least your minimum, everyone who viewed it recently gets a notification with the new price.',
+        'Shoppers who already bought the product are skipped. Works without extra Shopify permissions.',
+      ],
+      vars: ['product_name', 'new_price', 'old_price', 'drop_percent', 'store_name'],
+    },
+    back_in_stock: {
+      name: 'Back in stock',
+      icon: 'fa-box-open',
+      desc: 'Tell shoppers when a sold-out product they viewed is available again.',
+      how: [
+        'We notice when a product your subscribers viewed sells out, and when it comes back.',
+        'Everyone who looked at it while it was sold out gets one notification.',
+        'Works without extra Shopify permissions.',
+      ],
+      vars: ['product_name', 'store_name'],
+    },
+    order_thank_you: {
+      name: 'Order thank-you',
+      icon: 'fa-bag-shopping',
+      desc: 'Thank buyers right after checkout, optionally with a code for their next order.',
+      how: [
+        'Needs instant order detection (one click in your Shopify admin).',
+        'Sent once per order to the subscriber who placed it.',
+      ],
+      vars: ['order_total', 'store_name', 'discount_code'],
+    },
   };
 
   var SOON = [
@@ -66,6 +98,9 @@
       ],
       browse_abandonment: { title: 'Still interested in {product_name}?', body: 'Take another look before it sells out.', button: 'View product' },
       winback: { title: 'We miss you at {store_name} 💙', body: 'New arrivals are waiting for you. Come take a look!', button: 'Shop now' },
+      price_drop: { title: 'Price drop on {product_name} 🔥', body: 'Now {new_price} (was {old_price}) — {drop_percent}% off. Grab it before the price goes back up!', button: 'Shop now' },
+      back_in_stock: { title: '{product_name} is back in stock! 🎉', body: 'It sold out fast last time. Get yours before it is gone again.', button: 'Buy now' },
+      order_thank_you: { title: 'Thank you for your order! 💙', body: 'We have received your order of {order_total} and are getting it ready.', button: 'Shop again' },
     },
     hi: {
       welcome: { title: '{store_name} mein aapka swagat hai! 🎉', body: 'Subscribe karne ke liye shukriya. Naye products aur offers sabse pehle aapko milenge.' },
@@ -76,11 +111,14 @@
       ],
       browse_abandonment: { title: '{product_name} pasand aaya?', body: 'Ek baar phir dekh lijiye — stock limited hai!', button: 'Product dekhein' },
       winback: { title: '{store_name} aapko miss kar raha hai 💙', body: 'Naye products aa gaye hain. Ek nazar daaliye!', button: 'Shop karein' },
+      price_drop: { title: '{product_name} ka price gir gaya! 🔥', body: 'Ab sirf {new_price} (pehle {old_price}) — {drop_percent}% off. Price wapas badhne se pehle le lijiye!', button: 'Abhi khareedein' },
+      back_in_stock: { title: '{product_name} wapas stock mein hai! 🎉', body: 'Pichhli baar jaldi sold out ho gaya tha. Is baar miss mat kijiye!', button: 'Abhi khareedein' },
+      order_thank_you: { title: 'Order ke liye shukriya! 💙', body: 'Aapka {order_total} ka order mil gaya hai, hum use taiyaar kar rahe hain.', button: 'Phir se shop karein' },
     },
   };
 
   var LIMITS = { title: 80, body: 220, button: 24 };
-  var ORDER = ['welcome', 'abandoned_cart', 'browse_abandonment', 'winback'];
+  var ORDER = ['welcome', 'abandoned_cart', 'browse_abandonment', 'price_drop', 'back_in_stock', 'order_thank_you', 'winback'];
 
   // ------------------------------------------------------------------ state
   var S = { el: null, api: null, store: null, data: null, edit: null, busy: false };
@@ -93,6 +131,11 @@
   }
   function clone(o) { return JSON.parse(JSON.stringify(o)); }
   function num(n) { return Number(n || 0).toLocaleString('en-IN'); }
+  function money(n) {
+    var cur = (S.data && S.data.currency) || 'INR';
+    try { return new Intl.NumberFormat('en-IN', { style: 'currency', currency: cur, maximumFractionDigits: 0 }).format(Number(n) || 0); }
+    catch (e) { return num(Math.round(Number(n) || 0)); }
+  }
   function ctr(s) { return s && s.sent ? ((s.clicks / s.sent) * 100).toFixed(1) + '%' : '—'; }
 
   function splitDelay(min) {
@@ -131,6 +174,10 @@
       cart_total: '₹1,299',
       store_name: (S.store && S.store.name) || 'Your Store',
       discount_code: code,
+      order_total: '₹1,299',
+      old_price: '₹1,499',
+      new_price: '₹1,199',
+      drop_percent: 20,
     };
   }
   function render(str, vars) {
@@ -178,8 +225,11 @@
           : 'Waiting for the first subscriber to visit your store after this update (usually within a few hours).') +
       checklistItem(h.engine_ok ? 'ok' : 'warn', 'Automation engine',
         h.engine_ok ? 'Running every 5 minutes · last run ' + esc(ago(h.engine_last_run)) : 'Not running yet' + (h.engine_last_run ? ' · last run ' + esc(ago(h.engine_last_run)) : '') + '. It starts automatically after deployment.') +
-      checklistItem('info', 'Stop reminders after purchase',
-        'Reminders stop when a cart is emptied or replaced. Instant order detection arrives in the next update.') +
+      (h.order_detection
+        ? checklistItem('ok', 'Instant order detection', esc(num(h.orders_tracked_7d)) + ' orders from subscribers in 7 days. Cart reminders stop right after a purchase.')
+        : checklistItem('warn', 'Instant order detection is off',
+            'Stops cart reminders the moment someone buys and shows recovered revenue. ' +
+            '<a class="ra-link" target="_blank" rel="noopener" href="' + esc(h.order_detection_setup_url || '#') + '">Turn on in Shopify admin →</a>')) +
       '</div></section>';
   }
 
@@ -194,8 +244,15 @@
     var extra = '';
     if (key === 'abandoned_cart') extra = '<div class="ra-stat"><b>' + esc(num(S.data.health.open_carts)) + '</b><span>Open carts</span></div>';
     if (key === 'welcome' && s.sent_all_time) extra = '<div class="ra-stat"><b>' + esc(num(s.sent_all_time)) + '</b><span>Sent all-time</span></div>';
+    if ((key === 'price_drop' || key === 'back_in_stock') && isOn(key)) {
+      extra = '<div class="ra-stat"><b>' + esc(num(key === 'price_drop' ? S.data.health.products_watched : S.data.health.products_sold_out)) + '</b><span>' + (key === 'price_drop' ? 'Products watched' : 'Sold out now') + '</span></div>';
+    }
+    if (s.revenue) extra += '<div class="ra-stat"><b>' + esc(money(s.revenue)) + '</b><span>Revenue (' + esc(num(s.orders)) + ' orders)</span></div>';
     var review = needsReview(key)
       ? '<div class="ra-note">We imported your old settings. Please review the text and timing, then turn it on.</div>' : '';
+    if (key === 'order_thank_you' && !S.data.health.order_detection) {
+      review += '<div class="ra-note">Needs instant order detection. <a class="ra-link" target="_blank" rel="noopener" href="' + esc(S.data.health.order_detection_setup_url || '#') + '">Turn it on in Shopify admin →</a></div>';
+    }
     return '<div class="ra-card ra-auto" data-key="' + key + '">' +
       '<div class="ra-auto-head"><div class="ra-icon"><i class="fas ' + m.icon + '"></i></div>' +
       '<div class="ra-auto-title"><div class="ra-row"><h4>' + esc(m.name) + '</h4>' + statusPill(key) + '</div><p>' + esc(m.desc) + '</p></div></div>' +
@@ -292,6 +349,23 @@
         '<select data-field="delay_unit">' + ['minutes', 'hours', 'days'].map(function (u) { return '<option value="' + u + '"' + (u === d.unit ? ' selected' : '') + '>' + u + '</option>'; }).join('') + '</select>' +
         '</div><div class="ra-hint">' + (key === 'abandoned_cart' ? 'Recommended: 1 hour, then 1 day, then 3 days.' : 'Recommended: 2 hours after the product view.') + '</div></div>';
     }
+    if (key === 'order_thank_you') {
+      var od = splitDelay(c.delay_minutes);
+      html += '<div class="ra-field"><label>Send after the order</label><div class="ra-inline">' +
+        '<input type="number" min="0" data-field="delay_value" value="' + esc(od.value) + '" style="width:90px">' +
+        '<select data-field="delay_unit">' + ['minutes', 'hours'].map(function (u) { return '<option value="' + u + '"' + (u === od.unit ? ' selected' : '') + '>' + u + '</option>'; }).join('') + '</select>' +
+        '</div><div class="ra-hint">0 to 24 hours. Recommended: 5 minutes.</div></div>';
+    }
+    if (key === 'price_drop') {
+      html += '<div class="ra-field"><label>Notify when the price drops by at least</label><div class="ra-inline">' +
+        '<input type="number" min="1" max="90" data-field="min_drop_percent" value="' + esc(c.min_drop_percent) + '" style="width:90px"><span>%</span></div>' +
+        '<div class="ra-hint">Small changes are ignored. Recommended: 5%.</div></div>';
+    }
+    if (key === 'price_drop' || key === 'back_in_stock') {
+      html += '<div class="ra-field"><label>Who gets it: subscribers who viewed the product in the last</label><div class="ra-inline">' +
+        '<input type="number" min="1" max="' + (key === 'price_drop' ? 60 : 90) + '" data-field="lookback_days" value="' + esc(c.lookback_days) + '" style="width:90px"><span>days</span></div>' +
+        '<div class="ra-hint">' + (key === 'price_drop' ? 'Recommended: 14 days.' : 'Recommended: 30 days. Only people who saw it while it was sold out are notified.') + '</div></div>';
+    }
     if (key === 'winback') {
       html += '<div class="ra-field"><label>Send when a subscriber has not visited for</label><div class="ra-inline">' +
         '<input type="number" min="7" max="180" data-field="inactive_days" value="' + esc(c.inactive_days) + '" style="width:90px"><span>days</span></div>' +
@@ -310,7 +384,10 @@
     if (key === 'abandoned_cart' || key === 'browse_abandonment') {
       html += fieldHtml('Image (optional)', 'ra-f-image', c.image, { field: 'image', placeholder: 'https://…', hint: 'Leave empty to show the product photo automatically.' });
     }
-    if (key === 'abandoned_cart' || key === 'winback') {
+    if (key === 'price_drop' || key === 'back_in_stock') {
+      html += '<div class="ra-hint" style="margin:-6px 0 14px">The product photo is added automatically.</div>';
+    }
+    if (key === 'abandoned_cart' || key === 'winback' || key === 'order_thank_you') {
       html += fieldHtml('Discount code (optional)', 'ra-f-discount', c.discount_code, {
         field: 'discount_code', placeholder: 'e.g. COMEBACK10',
         hint: 'Create the code first in Shopify admin → Discounts. It is applied automatically when the shopper taps.',
@@ -324,7 +401,7 @@
     var v = sampleVars();
     var title = render(c.title, v) || 'Title';
     var body = render(c.body, v) || 'Message';
-    var img = c.image || (S.edit.key === 'abandoned_cart' || S.edit.key === 'browse_abandonment' ? 'product' : '');
+    var img = c.image || (['abandoned_cart', 'browse_abandonment', 'price_drop', 'back_in_stock'].indexOf(S.edit.key) !== -1 ? 'product' : '');
     var imgHtml = img === 'product'
       ? '<div class="ra-pv-img ra-pv-img-ph"><i class="fas fa-shirt"></i><span>Product photo</span></div>'
       : img ? '<img class="ra-pv-img" src="' + esc(img) + '" alt="">' : '';
@@ -389,6 +466,8 @@
       var unit = S.el.querySelector('[data-field="delay_unit"]').value;
       c.delay_minutes = toMinutes(val, unit);
     } else if (field === 'inactive_days') c.inactive_days = Number(el.value) || 0;
+    else if (field === 'min_drop_percent') c.min_drop_percent = Number(el.value) || 0;
+    else if (field === 'lookback_days') c.lookback_days = Number(el.value) || 0;
     else c[field] = el.value;
 
     var counter = S.el.querySelector('[data-count-for="' + el.id + '"]');

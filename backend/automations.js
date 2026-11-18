@@ -14,6 +14,7 @@ const crypto = require('crypto');
 
 const DEFAULT_ICON = 'https://cdn-icons-png.flaticon.com/512/733/733585.png';
 const DEFAULT_SUBJECT = 'mailto:Koregrowtech@gmail.com';
+const SHOPIFY_CLIENT_ID = () => process.env.SHOPIFY_API_KEY || 'd5c35985fb2e26a210f931c4b6a92c87';
 const APP_BASE_URL = () => (process.env.APP_URL || 'https://push-retner.vercel.app').replace(/\/$/, '');
 
 const CART_WINDOW_MIN = 7 * 24 * 60;          // reminders only for carts active in the last 7 days
@@ -51,13 +52,48 @@ const DEFAULT_SETTINGS = {
         button: 'Shop now',
         discount_code: '',
     },
+    order_thank_you: {
+        enabled: false,
+        delay_minutes: 5,
+        title: 'Thank you for your order! 💙',
+        body: 'We have received your order of {order_total} and are getting it ready.',
+        button: 'Shop again',
+        discount_code: '',
+    },
+    price_drop: {
+        enabled: false,
+        min_drop_percent: 5,
+        lookback_days: 14,
+        title: 'Price drop on {product_name} 🔥',
+        body: 'Now {new_price} (was {old_price}) — {drop_percent}% off. Grab it before the price goes back up!',
+        button: 'Shop now',
+    },
+    back_in_stock: {
+        enabled: false,
+        lookback_days: 30,
+        title: '{product_name} is back in stock! 🎉',
+        body: 'It sold out fast last time. Get yours before it is gone again.',
+        button: 'Buy now',
+    },
 };
 
 const DELAY_BOUNDS = {
     abandoned_cart: [15, CART_WINDOW_MIN],
     browse_abandonment: [30, 48 * 60],
     winback_days: [7, 180],
+    order_thank_you: [0, 24 * 60],
+    price_drop_percent: [1, 90],
+    price_drop_days: [1, 60],
+    back_in_stock_days: [1, 90],
 };
+
+// Product checker (price drop / back in stock).
+const PRODUCT_CHECK_INTERVAL_MIN = 60;
+const PRODUCT_CHECKS_PER_RUN = 40;
+const PRODUCT_CHECK_CONCURRENCY = 6;
+const PRODUCT_CHECK_TIMEOUT_MS = 6000;
+const PRODUCT_TRACK_DAYS = 30;          // products viewed in the last 30 days are watched
+const ATTRIBUTION_DAYS = 7;             // orders within 7 days of a push click count as recovered revenue
 
 // --------------------------------------------------------------------------
 // Small helpers
@@ -321,6 +357,37 @@ function validateAutomationConfig(automation, input) {
         return { errors, value: { enabled, title, body } };
     }
 
+    if (automation === 'order_thank_you') {
+        const r = validateStep({ ...input, enabled: true }, DELAY_BOUNDS.order_thank_you);
+        const v = r.value;
+        return {
+            errors: r.errors,
+            value: { enabled, delay_minutes: v.delay_minutes, title: v.title, body: v.body, button: v.button, discount_code: v.discount_code },
+        };
+    }
+
+    if (automation === 'price_drop' || automation === 'back_in_stock') {
+        const r = validateStep({ ...input, enabled: true, delay_minutes: 60 }, [1, 1e9]);
+        errors.push(...r.errors);
+        const days = Math.round(Number(input && input.lookback_days));
+        const [dlo, dhi] = automation === 'price_drop' ? DELAY_BOUNDS.price_drop_days : DELAY_BOUNDS.back_in_stock_days;
+        if (!Number.isFinite(days) || days < dlo || days > dhi) errors.push(`"Viewed in the last" must be between ${dlo} and ${dhi} days.`);
+        const value = {
+            enabled,
+            lookback_days: Number.isFinite(days) ? days : dlo,
+            title: r.value.title,
+            body: r.value.body,
+            button: r.value.button,
+        };
+        if (automation === 'price_drop') {
+            const pct = Math.round(Number(input && input.min_drop_percent));
+            const [plo, phi] = DELAY_BOUNDS.price_drop_percent;
+            if (!Number.isFinite(pct) || pct < plo || pct > phi) errors.push(`Minimum price drop must be between ${plo}% and ${phi}%.`);
+            value.min_drop_percent = Number.isFinite(pct) ? pct : 5;
+        }
+        return { errors, value };
+    }
+
     return { errors: ['Unknown automation.'], value: null };
 }
 
@@ -333,18 +400,20 @@ async function ensureSchema(db) {
     const { rows } = await db.query(
         `SELECT table_name, column_name FROM information_schema.columns
          WHERE table_schema = 'public' AND (
-           table_name IN ('push_carts','push_product_views','push_automation_log','push_system_state')
+           table_name IN ('push_carts','push_product_views','push_automation_log','push_system_state','push_orders','push_products','push_product_events')
            OR (table_name = 'subscriptions' AND column_name IN ('last_seen_at','winback_sent_at','status','expired_at'))
            OR (table_name = 'stores' AND column_name = 'automation_settings'))`
     );
     const have = new Set(rows.map((r) => `${r.table_name}.${r.column_name}`));
     const tablesOk = ['push_carts.id', 'push_product_views.id', 'push_automation_log.id', 'push_system_state.key'].every((k) => have.has(k));
     const colsOk = ['subscriptions.last_seen_at', 'subscriptions.winback_sent_at', 'subscriptions.status', 'subscriptions.expired_at', 'stores.automation_settings'].every((k) => have.has(k));
-    if (!tablesOk || !colsOk) {
+    const phase2Ok = ['push_orders.id', 'push_products.product_id', 'push_product_events.id'].every((k) => have.has(k));
+    if (!tablesOk || !colsOk || !phase2Ok) {
         const fs = require('fs');
         const path = require('path');
-        const sql = fs.readFileSync(path.join(__dirname, 'sql', '20261119_automations.sql'), 'utf8');
-        await db.query(sql);
+        for (const file of ['20261119_automations.sql', '20261119_phase2.sql']) {
+            await db.query(fs.readFileSync(path.join(__dirname, 'sql', file), 'utf8'));
+        }
     }
     schemaChecked = true;
 }
@@ -623,6 +692,274 @@ async function runWinback(ctx, store, config, summary) {
 }
 
 // --------------------------------------------------------------------------
+// Order thank-you (orders reported by the Retner web pixel)
+// --------------------------------------------------------------------------
+async function storeCurrency(db, storeId) {
+    const { rows } = await db.query(
+        `SELECT currency FROM (
+           SELECT currency, updated_at AS at FROM push_carts WHERE store_id = $1 AND currency IS NOT NULL
+           UNION ALL
+           SELECT currency, created_at AS at FROM push_orders WHERE store_id = $1 AND currency IS NOT NULL
+         ) c ORDER BY at DESC LIMIT 1`,
+        [storeId]
+    );
+    return (rows[0] && rows[0].currency) || 'INR';
+}
+
+async function runOrderThankYou(ctx, store, config, summary) {
+    const now = ctx.now;
+    const { rows: orders } = await ctx.db.query(
+        `SELECT o.id, o.endpoint, o.total_price, o.currency, s.keys, s.store_domain
+         FROM push_orders o
+         JOIN subscriptions s ON s.endpoint = o.endpoint
+         WHERE o.store_id = $1 AND o.thanked_at IS NULL AND o.endpoint IS NOT NULL
+           AND o.created_at <= $2 AND o.created_at >= $3
+           AND s.status IS DISTINCT FROM 'expired'
+         ORDER BY o.created_at ASC
+         LIMIT $4`,
+        [store.store_id, new Date(now - config.delay_minutes * 60e3), new Date(now - 48 * 3600e3), ctx.perStoreLimit]
+    );
+    await mapLimit(orders.slice(0, ctx.budget.left()), SEND_CONCURRENCY, async (order) => {
+        const claim = await ctx.db.query(`UPDATE push_orders SET thanked_at = $2 WHERE id = $1 AND thanked_at IS NULL RETURNING id`, [order.id, now]);
+        if (!claim.rowCount || !ctx.budget.take()) return;
+        const domain = storeDomainFor(store.store_id, order.store_domain);
+        const vars = {
+            store_name: store.store_name || store.store_id,
+            order_total: formatMoney(order.total_price, order.currency),
+            discount_code: config.discount_code,
+        };
+        const result = await sendAutomated(ctx, {
+            store,
+            automation: 'order_thank_you',
+            step: 1,
+            sub: { endpoint: order.endpoint, keys: order.keys },
+            refId: String(order.id),
+            title: renderTemplate(config.title, vars),
+            body: renderTemplate(config.body, vars),
+            image: null,
+            targetUrl: storeHomeUrl(domain, config.discount_code, 'order_thank_you'),
+            button: config.button,
+            tag: `retner-order-${order.id}`,
+        });
+        if (result.ok) summary.thankYou++;
+        else if (!result.expired) summary.errors.push(`order ${order.id}: ${result.error}`);
+    });
+}
+
+// --------------------------------------------------------------------------
+// Product checker: price drop / back in stock
+// Uses the store's public /products/<handle>.js (no extra Shopify permissions).
+// --------------------------------------------------------------------------
+function productHandle(url) {
+    const m = typeof url === 'string' && url.match(/\/products\/([^/?#]+)/);
+    if (!m) return null;
+    try { return decodeURIComponent(m[1]).slice(0, 255); } catch { return null; }
+}
+
+function httpsImage(v) {
+    if (typeof v !== 'string' || !v) return '';
+    const url = v.startsWith('//') ? `https:${v}` : v;
+    return isHttpsUrl(url) ? url : '';
+}
+
+async function fetchProductJson(fetchImpl, domain, handle) {
+    const controller = new AbortController();
+    const timer = setTimeout(() => controller.abort(), PRODUCT_CHECK_TIMEOUT_MS);
+    try {
+        const res = await fetchImpl(`https://${domain}/products/${encodeURIComponent(handle)}.js`, {
+            headers: { Accept: 'application/json', 'User-Agent': 'RetnerSmartPush/1.0 (price-drop and back-in-stock alerts)' },
+            redirect: 'follow',
+            signal: controller.signal,
+        });
+        if (res.status === 404) return { notFound: true };
+        if (res.status === 429) return { rateLimited: true };
+        if (!res.ok) return { error: `HTTP ${res.status}` };
+        let j;
+        try { j = await res.json(); } catch { return { error: 'not JSON (password page?)' }; }
+        if (!j || !Number.isSafeInteger(Number(j.id)) || !Number.isFinite(Number(j.price))) return { error: 'not a product' };
+        return { product: j };
+    } catch (e) {
+        return { error: e && e.name === 'AbortError' ? 'timeout' : (e && e.message) || 'fetch failed' };
+    } finally {
+        clearTimeout(timer);
+    }
+}
+
+// Watches products viewed in the last 30 days for stores that use price drop
+// or back in stock, records changes in push_product_events.
+async function runProductChecks(ctx, storeSettings, summary) {
+    const storeIds = Object.keys(storeSettings);
+    if (!storeIds.length) return;
+    const now = ctx.now;
+    const since = new Date(now - PRODUCT_TRACK_DAYS * 864e5);
+
+    await ctx.db.query(
+        `INSERT INTO push_products (store_id, product_id, store_domain, title, image, url, next_check_at)
+         SELECT DISTINCT ON (v.store_id, v.product_id)
+                v.store_id, v.product_id, v.store_domain, v.product->>'title', v.product->>'image', v.product->>'url', $3
+         FROM push_product_views v
+         WHERE v.store_id = ANY($1) AND v.viewed_at >= $2
+         ORDER BY v.store_id, v.product_id, v.viewed_at DESC
+         ON CONFLICT (store_id, product_id) DO NOTHING`,
+        [storeIds, since, now]
+    );
+
+    const { rows: due } = await ctx.db.query(
+        `SELECT p.* FROM push_products p
+         WHERE p.store_id = ANY($1) AND p.next_check_at <= $2
+           AND EXISTS (SELECT 1 FROM push_product_views v WHERE v.store_id = p.store_id AND v.product_id = p.product_id AND v.viewed_at >= $3)
+         ORDER BY p.next_check_at ASC
+         LIMIT $4`,
+        [storeIds, now, since, PRODUCT_CHECKS_PER_RUN]
+    );
+
+    const nextIn = (minutes) => new Date(now.getTime() + minutes * 60e3);
+    await mapLimit(due, PRODUCT_CHECK_CONCURRENCY, async (p) => {
+        const handle = p.handle || productHandle(p.url);
+        const fail = async (error, minutes) => {
+            await ctx.db.query(
+                `UPDATE push_products SET check_failures = check_failures + 1, last_error = $3, next_check_at = $4 WHERE store_id = $1 AND product_id = $2`,
+                [p.store_id, p.product_id, String(error).slice(0, 200), nextIn(minutes)]
+            );
+            summary.productCheckErrors++;
+        };
+        if (!handle) return fail('no product handle', 7 * 1440);
+
+        const domain = storeDomainFor(p.store_id, p.store_domain);
+        const r = await fetchProductJson(ctx.fetch, domain, handle);
+        summary.productChecks++;
+        if (r.notFound) return fail('product not found', 1440);
+        if (r.rateLimited) return fail('rate limited', 120);
+        if (r.error) return fail(r.error, Math.min(1440, PRODUCT_CHECK_INTERVAL_MIN * 2 ** Math.min(5, p.check_failures + 1)));
+
+        const j = r.product;
+        if (String(j.id) !== String(p.product_id)) return fail('handle now points to another product', 1440);
+
+        const price = Math.round(Number(j.price));
+        const available = !!j.available;
+        const cfg = storeSettings[p.store_id];
+        const hasBaseline = p.last_checked_at !== null && p.price !== null;
+
+        if (hasBaseline && cfg.price_drop.enabled) {
+            const old = Number(p.price);
+            if (old > 0 && price > 0 && price <= old * (1 - cfg.price_drop.min_drop_percent / 100)) {
+                await ctx.db.query(
+                    `INSERT INTO push_product_events (store_id, product_id, type, old_price, new_price) VALUES ($1, $2, 'price_drop', $3, $4)`,
+                    [p.store_id, p.product_id, old, price]
+                );
+                summary.priceDrops++;
+            }
+        }
+        if (hasBaseline && cfg.back_in_stock.enabled && p.available === false && available) {
+            await ctx.db.query(
+                `INSERT INTO push_product_events (store_id, product_id, type, new_price, out_of_stock_since) VALUES ($1, $2, 'back_in_stock', $3, $4)`,
+                [p.store_id, p.product_id, price, p.out_of_stock_since]
+            );
+            summary.restocks++;
+        }
+
+        await ctx.db.query(
+            `UPDATE push_products SET
+               handle = $3, title = $4, image = $5, url = $6, price = $7, compare_at_price = $8, available = $9,
+               out_of_stock_since = CASE WHEN $9 THEN NULL ELSE COALESCE(out_of_stock_since, $10) END,
+               first_checked_at = COALESCE(first_checked_at, $10), last_checked_at = $10,
+               next_check_at = $11, check_failures = 0, last_error = NULL
+             WHERE store_id = $1 AND product_id = $2`,
+            [p.store_id, p.product_id, handle, clampStr(j.title, 150) || p.title, httpsImage(j.featured_image) || p.image,
+             typeof j.url === 'string' && j.url.startsWith('/') ? j.url.split('?')[0] : `/products/${handle}`,
+             price, Number.isFinite(Number(j.compare_at_price)) && j.compare_at_price !== null ? Math.round(Number(j.compare_at_price)) : null,
+             available, now, nextIn(PRODUCT_CHECK_INTERVAL_MIN)]
+        );
+    });
+}
+
+// Sends notifications for detected price drops / restocks of one store.
+async function runProductEvents(ctx, store, settings, summary) {
+    const now = ctx.now;
+    const { rows: events } = await ctx.db.query(
+        `SELECT e.*, p.title, p.image, p.url, p.store_domain
+         FROM push_product_events e
+         JOIN push_products p ON p.store_id = e.store_id AND p.product_id = e.product_id
+         WHERE e.store_id = $1 AND e.processed_at IS NULL
+         ORDER BY e.created_at ASC
+         LIMIT 20`,
+        [store.store_id]
+    );
+    if (!events.length) return;
+    const currency = await storeCurrency(ctx.db, store.store_id);
+
+    for (const ev of events) {
+        const claim = await ctx.db.query(`UPDATE push_product_events SET processed_at = $2 WHERE id = $1 AND processed_at IS NULL RETURNING id`, [ev.id, now]);
+        if (!claim.rowCount) continue;
+        const cfg = settings[ev.type];
+        if (!cfg || !cfg.enabled) {
+            await ctx.db.query(`UPDATE push_product_events SET recipients = 0 WHERE id = $1`, [ev.id]);
+            continue;
+        }
+        let viewedAfter = new Date(now - cfg.lookback_days * 864e5);
+        if (ev.type === 'back_in_stock' && ev.out_of_stock_since) {
+            // Only people who looked at it while it was sold out (1h tolerance).
+            const oos = new Date(new Date(ev.out_of_stock_since).getTime() - 3600e3);
+            if (oos > viewedAfter) viewedAfter = oos;
+        }
+        const { rows: recipients } = await ctx.db.query(
+            `SELECT DISTINCT ON (v.endpoint) v.endpoint, s.keys, s.store_domain
+             FROM push_product_views v
+             JOIN subscriptions s ON s.endpoint = v.endpoint
+             WHERE v.store_id = $1 AND v.product_id = $2 AND v.viewed_at >= $3 AND v.viewed_at <= $4
+               AND s.status IS DISTINCT FROM 'expired'
+               AND NOT EXISTS (
+                 SELECT 1 FROM push_automation_log l
+                 WHERE l.endpoint = v.endpoint AND l.automation = $5 AND l.ref_id = $2 AND l.status = 'sent' AND l.sent_at >= $6)
+               AND NOT EXISTS (
+                 SELECT 1 FROM push_orders o
+                 WHERE o.endpoint = v.endpoint AND o.store_id = v.store_id AND o.created_at >= v.viewed_at
+                   AND o.items @> jsonb_build_array(jsonb_build_object('product_id', $2::text)))
+             ORDER BY v.endpoint, v.viewed_at DESC
+             LIMIT $7`,
+            [store.store_id, ev.product_id, viewedAfter, ev.created_at, ev.type, new Date(now - 7 * 864e5), ctx.perStoreLimit]
+        );
+        const capped = await cappedEndpoints(ctx.db, recipients.map((r) => r.endpoint), now);
+        const send = recipients.filter((r) => !capped.has(r.endpoint)).slice(0, ctx.budget.left());
+
+        const domainBase = storeDomainFor(store.store_id, ev.store_domain);
+        const path = typeof ev.url === 'string' && ev.url.startsWith('/') ? ev.url : '/';
+        const oldP = Number(ev.old_price) / 100;
+        const newP = Number(ev.new_price) / 100;
+        const vars = {
+            product_name: ev.title || 'Your product',
+            store_name: store.store_name || store.store_id,
+            old_price: ev.old_price !== null ? formatMoney(oldP, currency) : '',
+            new_price: ev.new_price !== null ? formatMoney(newP, currency) : '',
+            drop_percent: ev.old_price ? Math.round((1 - Number(ev.new_price) / Number(ev.old_price)) * 100) : '',
+        };
+        let sent = 0;
+        await mapLimit(send, SEND_CONCURRENCY, async (r) => {
+            if (!ctx.budget.take()) return;
+            const domain = storeDomainFor(store.store_id, r.store_domain, domainBase);
+            const result = await sendAutomated(ctx, {
+                store,
+                automation: ev.type,
+                step: 1,
+                sub: { endpoint: r.endpoint, keys: r.keys },
+                refId: String(ev.product_id),
+                title: renderTemplate(cfg.title, vars),
+                body: renderTemplate(cfg.body, vars),
+                image: ev.image,
+                targetUrl: withParams(`https://${domain}${path}`, utm(ev.type)),
+                button: cfg.button,
+                tag: `retner-${ev.type}-${ev.product_id}`,
+            });
+            if (result.ok) sent++;
+            else if (!result.expired) summary.errors.push(`${ev.type} ${ev.product_id}: ${result.error}`);
+        });
+        await ctx.db.query(`UPDATE push_product_events SET recipients = $2 WHERE id = $1`, [ev.id, sent]);
+        if (ev.type === 'price_drop') summary.priceDropPushes += sent;
+        else summary.restockPushes += sent;
+    }
+}
+
+// --------------------------------------------------------------------------
 // Campaigns (broadcasts) — shared by "send now" and the scheduler
 // --------------------------------------------------------------------------
 async function activeSubscriptions(db, storeId) {
@@ -718,10 +1055,14 @@ function makeBudget(total) {
     return { left: () => Math.max(0, left), take: () => (left > 0 ? (left--, true) : false) };
 }
 
-async function runAutomations({ db, webPush, now = new Date(), onlyStore = null, budget = 1500, perStoreLimit = 300 } = {}) {
+async function runAutomations({ db, webPush, now = new Date(), onlyStore = null, budget = 1500, perStoreLimit = 300, fetch: fetchImpl = globalThis.fetch } = {}) {
     await ensureSchema(db);
-    const ctx = { db, webPush, now, budget: makeBudget(budget), perStoreLimit };
-    const summary = { scheduledCampaigns: 0, campaignPushes: 0, abandoned: 0, browse: 0, winback: 0, expiredCarts: 0, stores: 0, errors: [] };
+    const ctx = { db, webPush, now, budget: makeBudget(budget), perStoreLimit, fetch: fetchImpl };
+    const summary = {
+        scheduledCampaigns: 0, campaignPushes: 0, abandoned: 0, browse: 0, winback: 0, thankYou: 0,
+        productChecks: 0, productCheckErrors: 0, priceDrops: 0, restocks: 0, priceDropPushes: 0, restockPushes: 0,
+        expiredCarts: 0, stores: 0, errors: [],
+    };
 
     await runScheduledCampaigns(ctx, summary, onlyStore);
 
@@ -730,12 +1071,21 @@ async function runAutomations({ db, webPush, now = new Date(), onlyStore = null,
          FROM stores WHERE automation_settings IS NOT NULL ${onlyStore ? 'AND store_id = $1' : ''}`,
         onlyStore ? [onlyStore] : []
     );
+    const settingsByStore = new Map(stores.map((s) => [s.store_id, normalizeSettings(s)]));
+
+    // Check watched products first so drops/restocks found now are sent in this run.
+    const productStores = {};
+    for (const [id, st] of settingsByStore) if (st.price_drop.enabled || st.back_in_stock.enabled) productStores[id] = st;
+    try { await runProductChecks(ctx, productStores, summary); } catch (e) { summary.errors.push(`product checks: ${e.message}`); }
+
     for (const store of stores) {
-        const settings = normalizeSettings(store);
+        const settings = settingsByStore.get(store.store_id);
         const tasks = [];
         if (settings.abandoned_cart.enabled && !settings.abandoned_cart.needs_review) tasks.push(() => runAbandonedCart(ctx, store, settings.abandoned_cart, summary));
         if (settings.browse_abandonment.enabled) tasks.push(() => runBrowseAbandonment(ctx, store, settings.browse_abandonment, summary));
         if (settings.winback.enabled) tasks.push(() => runWinback(ctx, store, settings.winback, summary));
+        if (settings.order_thank_you.enabled) tasks.push(() => runOrderThankYou(ctx, store, settings.order_thank_you, summary));
+        if (productStores[store.store_id]) tasks.push(() => runProductEvents(ctx, store, settings, summary));
         if (!tasks.length) continue;
         summary.stores++;
         for (const task of tasks) {
@@ -766,7 +1116,7 @@ async function getDashboard(db, storeId) {
     const settings = normalizeSettings(store);
 
     const since = new Date(Date.now() - 30 * 864e5);
-    const [statsRes, subsRes, trackRes, cronRes, legacyRes] = await Promise.all([
+    const [statsRes, subsRes, trackRes, cronRes, legacyRes, revenueRes, ordersRes, pixelRes, productsRes, currency] = await Promise.all([
         db.query(
             `SELECT automation, COUNT(*) FILTER (WHERE status = 'sent') AS sent, COUNT(clicked_at) AS clicks
              FROM push_automation_log WHERE store_id = $1 AND sent_at >= $2 AND automation <> 'test' GROUP BY automation`,
@@ -787,16 +1137,38 @@ async function getDashboard(db, storeId) {
         ),
         db.query(`SELECT value, updated_at FROM push_system_state WHERE key = 'last_cron_run'`),
         db.query(`SELECT welcome_sent_count, welcome_click_count FROM stores WHERE store_id = $1`, [storeId]),
+        db.query(
+            `SELECT attributed_automation AS automation, COUNT(*) AS orders, COALESCE(SUM(total_price), 0) AS revenue
+             FROM push_orders WHERE store_id = $1 AND created_at >= $2 AND attributed_automation IS NOT NULL GROUP BY attributed_automation`,
+            [storeId, since]
+        ),
+        db.query(`SELECT COUNT(*) AS n FROM push_orders WHERE store_id = $1 AND created_at >= NOW() - INTERVAL '7 days'`, [storeId]),
+        db.query(`SELECT value, updated_at FROM push_system_state WHERE key = $1`, [`pixel:${storeId}`]),
+        db.query(
+            `SELECT COUNT(*) FILTER (WHERE last_checked_at >= NOW() - INTERVAL '2 days') AS watched,
+                    COUNT(*) FILTER (WHERE available = FALSE) AS sold_out
+             FROM push_products WHERE store_id = $1`,
+            [storeId]
+        ),
+        storeCurrency(db, storeId),
     ]);
 
     const stats = {};
     for (const r of statsRes.rows) stats[r.automation] = { sent: Number(r.sent), clicks: Number(r.clicks) };
+    for (const r of revenueRes.rows) {
+        stats[r.automation] = { sent: 0, clicks: 0, ...(stats[r.automation] || {}), orders: Number(r.orders), revenue: Number(r.revenue) };
+    }
     const legacy = legacyRes.rows[0] || {};
     stats.welcome = {
         sent: (stats.welcome ? stats.welcome.sent : 0),
         clicks: (stats.welcome ? stats.welcome.clicks : 0),
         sent_all_time: Number(legacy.welcome_sent_count || 0),
+        orders: stats.welcome ? stats.welcome.orders || 0 : 0,
+        revenue: stats.welcome ? stats.welcome.revenue || 0 : 0,
     };
+    const pixel = pixelRes.rows[0];
+    const pixelValue = pixel && pixel.value ? pixel.value : {};
+    const products = productsRes.rows[0] || {};
 
     const subs = subsRes.rows[0] || {};
     const track = trackRes.rows[0] || {};
@@ -818,7 +1190,14 @@ async function getDashboard(db, storeId) {
             product_views_7d: Number(track.views_7d || 0),
             engine_last_run: cron ? cron.updated_at : null,
             engine_ok: cronAgeMin !== null && cronAgeMin <= 15,
+            order_detection: !!pixelValue.active,
+            order_detection_checked_at: pixel ? pixel.updated_at : null,
+            orders_tracked_7d: Number((ordersRes.rows[0] || {}).n || 0),
+            products_watched: Number(products.watched || 0),
+            products_sold_out: Number(products.sold_out || 0),
+            order_detection_setup_url: `https://${storeId}.myshopify.com/admin/apps/${SHOPIFY_CLIENT_ID()}/app/additional`,
         },
+        currency,
     };
 }
 
@@ -883,6 +1262,10 @@ async function sendTest(ctx, store, automation, stepIndex, subscription, overrid
         ...cartVars(store, SAMPLE_CART),
         product_name: 'Classic Cotton T-Shirt',
         discount_code: cfg.discount_code || '',
+        order_total: formatMoney(1299, 'INR'),
+        old_price: formatMoney(1499, 'INR'),
+        new_price: formatMoney(1199, 'INR'),
+        drop_percent: 20,
     };
     const domain = storeDomainFor(store.store_id);
     return sendAutomated(ctx, {
