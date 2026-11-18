@@ -9,6 +9,9 @@ const jwt = require('jsonwebtoken'); // Added for SSO
 const SubscriptionModel = require('./subscriptionModel');
 const cors = require('cors');
 const { Pool } = require('pg');
+const automations = require('./automations');
+const auth = require('./auth');
+const { SERVICE_WORKER_SOURCE } = require('./sw-source');
 
 const app = express();
 
@@ -114,80 +117,17 @@ app.get('/sw.js', (req, res) => {
     res.set('Service-Worker-Allowed', '/');
     res.set('Content-Type', 'application/javascript');
     res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate'); // Force no cache
-    res.status(200).send(`
-        console.log('🚀 Service Worker v2 (Image Support) Loaded');
-        self.addEventListener('install', function(event) {
-            console.log('📦 Service Worker installing...');
-            event.waitUntil(self.skipWaiting());
-        });
-        self.addEventListener('activate', function(event) {
-            console.log('✅ Service Worker activating...');
-            event.waitUntil(self.clients.claim());
-        });
-        self.addEventListener('push', async function (event) {
-            try {
-                const message = await event.data.json();
-                const { title, body, icon, url, image, actions, data } = message; // Added 'data'
-                const options = {
-                    body: body || 'New Notification',
-                    icon: icon || 'https://cdn-icons-png.flaticon.com/512/733/733585.png',
-                    image: image || null,
-                    requireInteraction: true,
-                    data: data || { url: url || '/' }, // Use 'data' from payload if available
-                    actions: actions || [] // Add Actions here
-                };
-                await event.waitUntil(self.registration.showNotification(title, options));
-            } catch (error) { console.error('Push Error:', error); }
-        });
-        self.addEventListener('notificationclick', function (event) {
-            event.notification.close();
-            const url = event.notification.data.url;
-            const campId = event.notification.data.id;
-
-            // Track Click
-            if(campId) {
-                fetch('/api/track/click?id=' + campId, { mode: 'no-cors' });
-            }
-
-            event.waitUntil(
-                clients.matchAll({ type: 'window' }).then(windowClients => {
-                    for (var i = 0; i < windowClients.length; i++) {
-                        var client = windowClients[i];
-                        if (client.url === url && 'focus' in client) {
-                            return client.focus();
-                        }
-                    }
-                    if (clients.openWindow) {
-                        return clients.openWindow(url);
-                    }
-                })
-            );
-            // Default URL (Clicking body)
-            let openUrl = event.notification.data.url;
-
-            // Button Clicks
-            if (event.action) {
-               // event.action will contain the URL from our payload
-               openUrl = event.action; 
-            }
-
-            if (openUrl) {
-                event.waitUntil(clients.openWindow(openUrl));
-            }
-        });
-    `);
+    res.status(200).send(SERVICE_WORKER_SOURCE);
 });
 
 // --- ANALYTICS TRACKING ROUTES ---
 
-// 1. Track Click
+// Legacy click counter (old service workers). Clicks are now counted by the
+// signed /track-click redirect, so this only accepts real campaign ids.
 app.get('/api/track/click', async (req, res) => {
-    const { id } = req.query;
-    if (!id) return res.status(400).send('Missing ID');
-    try {
-        await getPool().query('UPDATE campaigns SET clicks = clicks + 1 WHERE id = $1', [id]);
-        res.status(200).send('OK');
-    } catch (e) { console.error('Track error', e); res.status(500).send('Error'); }
+    const id = parseInt(req.query.id, 10);
+    if (!Number.isSafeInteger(id)) return res.status(400).send('Missing ID');
+    res.status(200).send('OK');
 });
 
 // --- SHOPIFY WEBHOOK HELPERS & GDPR ---
@@ -222,16 +162,13 @@ app.post('/webhooks/shopify/order', verifyShopifyWebhook, async (req, res) => {
 
         const db = getPool();
         
-        // 0. Remove completed checkout from abandoned list to prevent false reminders
+        // 0. Stop cart reminders for carts that turned into an order
         try {
-            if (checkout_id || checkout_token || cart_token) {
-                await db.query(
-                    'DELETE FROM abandoned_checkouts WHERE checkout_id = $1 OR token = $2 OR token = $3', 
-                    [checkout_id ? checkout_id.toString() : null, checkout_token, cart_token]
-                );
-                console.log(`✅ Cleared completed checkout from abandoned_checkouts`);
+            const token = automations.normalizeCartToken(cart_token);
+            if (token) {
+                await db.query(`UPDATE push_carts SET status = 'purchased' WHERE cart_token = $1 AND status = 'active'`, [token]);
             }
-        } catch(err) { console.error('Failed to clear abandoned checkout:', err.message); }
+        } catch(err) { console.error('Failed to mark cart purchased:', err.message); }
 
         // 1. Identify Campaign
         let campaignId = null;
@@ -277,57 +214,36 @@ app.get('/admin', (req, res) => {
     res.redirect('/store-admin');
 });
 
-// Subscribe Endpoint
-app.post('/subscribe', async (req, res) => {
+// Legacy direct subscribe endpoints (the Shopify app proxy handles real
+// storefront traffic). Only real Web Push endpoints are accepted.
+async function legacySubscribe(req, res) {
     try {
-        console.log('🔔 Subscribe Request:', req.body.storeId);
-        await SubscriptionModel.create(req.body);
-
-        const options = {
-            vapidDetails: {
-                subject: 'mailto:admin@zyrajewel.co.in',
-                publicKey: process.env.PUBLIC_KEY,
-                privateKey: process.env.PRIVATE_KEY,
-            }
-        };
-        try {
-            await webPush.sendNotification(
-                { endpoint: req.body.endpoint, keys: req.body.keys },
-                JSON.stringify({ title: 'Welcome!', body: 'You are now subscribed!' }),
-                options
-            );
-        } catch (e) { console.error('Welcome push failed:', e.message); }
-
+        if (!automations.isValidPushEndpoint(req.body && req.body.endpoint) || !req.body.keys) {
+            return res.status(400).json({ success: false, error: 'Invalid subscription' });
+        }
+        await SubscriptionModel.create({ ...req.body, cartToken: automations.normalizeCartToken(req.body.cartToken) });
         res.json({ success: true });
     } catch (err) {
-        console.error("Login Error:", err);
-        res.status(500).json({ success: false, error: 'Server Error: ' + err.message });
+        console.error('Subscribe error:', err.message);
+        res.status(500).json({ success: false, error: 'Server error' });
     }
-});
-
-app.post('/apps/push/subscribe', async (req, res) => {
-    try {
-        await SubscriptionModel.create(req.body);
-        res.json({ success: true });
-    } catch (error) {
-        res.status(500).json({ error: error.message });
-    }
-});
+}
+app.post('/subscribe', legacySubscribe);
+app.post('/apps/push/subscribe', legacySubscribe);
 
 app.post('/apps/push/link-cart', async (req, res) => {
     try {
-        const { endpoint, cartToken, customerId, storeId } = req.body;
-        if (!endpoint || !cartToken) return res.status(400).json({ error: 'Missing endpoint or cartToken' });
-        
-        const db = getPool();
-        await db.query(
-            'UPDATE subscriptions SET cart_token = $1, customer_id = COALESCE($2, customer_id) WHERE endpoint = $3',
-            [cartToken, customerId || null, endpoint]
+        const { endpoint, cartToken, customerId } = req.body || {};
+        const token = automations.normalizeCartToken(cartToken);
+        if (!automations.isValidPushEndpoint(endpoint) || !token) return res.status(400).json({ error: 'Missing endpoint or cartToken' });
+        await getPool().query(
+            'UPDATE subscriptions SET cart_token = $1, customer_id = COALESCE($2, customer_id), last_seen_at = NOW() WHERE endpoint = $3',
+            [token, customerId ? String(customerId).slice(0, 40) : null, endpoint]
         );
         res.json({ success: true });
     } catch (error) {
-        console.error('Link cart error:', error);
-        res.status(500).json({ error: error.message });
+        console.error('Link cart error:', error.message);
+        res.status(500).json({ error: 'Server error' });
     }
 });
 
@@ -359,93 +275,87 @@ app.get('/apps/push/config', async (req, res) => {
 // 🔐 STORE AUTHENTICATION
 // =====================================================
 
-// Login
+const OPEN_FROM_SHOPIFY = 'Open the dashboard from your Shopify admin: Apps → Retner SmartPush → Open Dashboard.';
+
+function storeSessionPayload(storeId, storeName) {
+    return {
+        id: storeId,
+        name: storeName || storeId,
+        domain: `${storeId}.myshopify.com`,
+        token: auth.issueStoreToken(storeId),
+    };
+}
+
+// Login with a dashboard password (set from Settings after opening the
+// dashboard from Shopify). There is no master password.
 app.post('/store-login', async (req, res) => {
-    const { storeId, password } = req.body;
-    console.log(`🔐 Login attempt for: ${storeId}`);
-
+    const storeId = String((req.body && req.body.storeId) || '').trim().toLowerCase();
+    const password = String((req.body && req.body.password) || '');
     try {
-        // Check DB
         await initStoresTable();
         const db = getPool();
-        const result = await db.query('SELECT * FROM stores WHERE store_id = $1', [storeId]);
+        const result = await db.query('SELECT store_id, store_name, password FROM stores WHERE store_id = $1', [storeId]);
         const store = result.rows[0];
-
-        // MASTER PASSWORD or DB PASSWORD
-        if (password === 'admin123' || (store && store.password === password)) {
-            console.log('✅ Login Successful!');
-            return res.json({
-                success: true,
-                token: 'token-' + Date.now(),
-                store: {
-                    id: storeId,
-                    name: store ? store.store_name : storeId,
-                    domain: `${storeId}.myshopify.com`
-                }
-            });
+        const check = store ? auth.verifyPassword(store.password, password) : { ok: false };
+        if (!check.ok) {
+            return res.status(401).json({ success: false, error: `Invalid store ID or password. ${OPEN_FROM_SHOPIFY}` });
         }
-        res.status(401).json({ success: false, error: 'Invalid Credentials. If the store is does not exist, please Create an Account.' });
-
-    } catch (err) {
-        console.error("Login Server Error:", err);
-        res.status(500).json({ success: false, error: 'Server Error: ' + (err.message || err.toString()) });
-    }
-});
-
-// Create Account (Register)
-app.post('/store-register', async (req, res) => {
-    const { storeId, password, storeName } = req.body;
-    try {
-        await initStoresTable();
-        const db = getPool();
-        await db.query(
-            `INSERT INTO stores (store_id, password, store_name) VALUES ($1, $2, $3)
-             ON CONFLICT (store_id) DO UPDATE SET password = $2, store_name = $3`,
-            [storeId, password, storeName]
-        );
-        res.json({ success: true });
-    } catch (err) {
-        res.status(500).json({ error: err.message });
-    }
-});
-
-// Forgot Password (Show Password)
-app.post('/store-forgot', async (req, res) => {
-    const { storeId } = req.body;
-    try {
-        const db = getPool();
-        const result = await db.query('SELECT password FROM stores WHERE store_id = $1', [storeId]);
-        if (result.rows.length > 0) {
-            res.json({ success: true, password: result.rows[0].password });
-        } else {
-            res.json({ success: false, error: 'Store ID not found' });
+        if (check.needsUpgrade) {
+            await db.query('UPDATE stores SET password = $2 WHERE store_id = $1', [storeId, auth.hashPassword(password)]);
         }
+        res.json({ success: true, store: storeSessionPayload(storeId, store.store_name) });
     } catch (err) {
-        res.status(500).json({ error: err.message });
+        console.error('Login Server Error:', err.message);
+        res.status(500).json({ success: false, error: 'Server error' });
     }
 });
 
-// CLICK TRACKING ENDPOINT
+// Self-registration is disabled: anyone could have registered (or
+// re-registered) any store id. Accounts are created by opening the dashboard
+// from the Shopify app.
+app.post('/store-register', (req, res) => {
+    res.status(403).json({ success: false, error: `New accounts are created automatically. ${OPEN_FROM_SHOPIFY}` });
+});
+
+// Passwords are never revealed.
+app.post('/store-forgot', (req, res) => {
+    res.json({ success: false, error: `For security, passwords can't be shown. ${OPEN_FROM_SHOPIFY} Then set a new password in Settings.` });
+});
+
+// Campaign click tracking. Links are signed so this cannot be abused as an
+// open redirect; unsigned (old) links show a confirmation page instead.
 app.get('/track-click', async (req, res) => {
-    const { url, c } = req.query;
+    const url = typeof req.query.url === 'string' ? req.query.url : '';
+    const c = req.query.c;
+    let target;
+    try { target = new URL(url); } catch { return res.status(400).send('Invalid link'); }
+    if (!/^https?:$/.test(target.protocol)) return res.status(400).send('Invalid link');
 
-    // Asynchronously update click count
-    if (c) {
-        try {
-            const db = getPool();
-            await db.query('ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS clicks INTEGER DEFAULT 0');
-            await db.query('UPDATE campaigns SET clicks = COALESCE(clicks, 0) + 1 WHERE id = $1', [c]);
-        } catch (e) {
-            console.error("Click Tracking DB Error:", e.message);
-        }
+    if (c && automations.verifyCampaignClick(c, url, req.query.s)) {
+        getPool().query('UPDATE campaigns SET clicks = COALESCE(clicks, 0) + 1 WHERE id = $1', [parseInt(c, 10)])
+            .catch((e) => console.error('Click tracking error:', e.message));
+        return res.redirect(302, url);
     }
+    const safe = target.toString().replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
+    res.status(200).send(`<!DOCTYPE html><meta name="viewport" content="width=device-width,initial-scale=1"><title>Continue</title>
+<div style="font-family:sans-serif;max-width:480px;margin:60px auto;padding:0 16px;text-align:center">
+<p>You are leaving Retner SmartPush.</p><p style="word-break:break-all;color:#555">${safe}</p>
+<a href="${safe}" rel="noopener noreferrer" style="display:inline-block;margin-top:12px;padding:10px 18px;background:#2563EB;color:#fff;border-radius:6px;text-decoration:none">Continue</a></div>`);
+});
 
-    // Redirect to destination
-    if (url) {
-        res.redirect(url);
-    } else {
-        res.send("Invalid Link");
+// Automation click tracking (signed links from automated pushes).
+app.get('/n/c', async (req, res) => {
+    const logId = parseInt(req.query.l, 10);
+    const url = typeof req.query.u === 'string' ? req.query.u : '';
+    if (!Number.isSafeInteger(logId) || !automations.verifyAutomationClick(logId, url, req.query.s)) {
+        return res.status(400).send('Invalid link');
     }
+    try { await automations.recordClick(getPool(), logId); } catch (e) { console.error('Automation click error:', e.message); }
+    res.redirect(302, url);
+});
+
+app.get('/api/vapid-public-key', (req, res) => {
+    res.json({ publicKey: process.env.PUBLIC_KEY || null });
 });
 
 // Store Admin Dashboard HTML (SSO Enabled)
@@ -456,42 +366,29 @@ app.get('/store-admin', async (req, res) => {
     let injectedStore = null;
     if (req.query.sso_token) {
         try {
-            const secret = 'retner_sso_final_2025';
-            // Only verify if secret is available
-            if (secret) {
-                const decoded = jwt.verify(req.query.sso_token, secret);
+            const decoded = auth.verifySsoToken(String(req.query.sso_token));
+            const shopId = decoded.shop.split('.')[0].toLowerCase(); // 'example' from 'example.myshopify.com'
+            let storeName = shopId;
 
-                // Valid Token! Prepare Store Object
-                const shopId = decoded.shop.split('.')[0]; // 'example' from 'example.myshopify.com'
-                const authStore = {
-                    id: shopId,
-                    name: shopId, // Use handle as name initially
-                    domain: decoded.shop
-                };
-
-                injectedStore = authStore;
-                console.log(`✅ SSO Token Valid. Auto-Creating/Syncing Account for: ${shopId}`);
-
-                // AUTO-REGISTER IN DB
-                try {
-                    const db = getPool();
-                    await db.query(`
-                        INSERT INTO stores (store_id, store_name, password) 
-                        VALUES ($1, $2, 'sso-managed') 
-                        ON CONFLICT (store_id) DO UPDATE SET store_name = $2
-                     `, [shopId, shopId]);
-                    console.log(`✅ Account Synced in DB: ${shopId}`);
-                } catch (dbErr) {
-                    console.error("⚠️ SSO DB Upsert Error:", dbErr.message);
-                }
+            // Create the account on first open; keep an existing name/password.
+            try {
+                const db = getPool();
+                const r = await db.query(`
+                    INSERT INTO stores (store_id, store_name, password)
+                    VALUES ($1, $1, $2)
+                    ON CONFLICT (store_id) DO UPDATE SET store_id = EXCLUDED.store_id
+                    RETURNING store_name
+                 `, [shopId, auth.SSO_MANAGED]);
+                if (r.rows[0] && r.rows[0].store_name) storeName = r.rows[0].store_name;
+            } catch (dbErr) {
+                console.error("⚠️ SSO DB Upsert Error:", dbErr.message);
             }
+            injectedStore = storeSessionPayload(shopId, storeName);
         } catch (e) {
             console.error("❌ SSO Verification Failed:", e.message);
-            // DEBUG: Show Error on Screen
-            return res.send(`<div style="padding:50px; text-align:center; color:red; font-family:sans-serif;">
-                <h1>SSO Verification Error</h1>
-                <p><strong>Error:</strong> ${e.message}</p>
-                <p>Try refreshing the Shopify App page completely.</p>
+            return res.status(401).send(`<div style="padding:50px; text-align:center; font-family:sans-serif;">
+                <h1>Your login link has expired</h1>
+                <p>Please open the dashboard again from your Shopify admin (Apps → Retner SmartPush).</p>
                 <a href="/store-admin">Go to Login</a>
             </div>`);
         }
@@ -634,6 +531,8 @@ app.get('/store-admin', async (req, res) => {
         .btn-sm { font-size: 12px; padding: 4px 8px; }
 
     </style>
+    <link rel="stylesheet" href="/css/automations.css?v=1">
+    <script src="/js/automations.js?v=1" defer></script>
 </head>
 <body>
 
@@ -650,19 +549,8 @@ app.get('/store-admin', async (req, res) => {
                 <input type="password" id="password" placeholder="••••••••">
             </div>
             <button class="new-campaign-btn" onclick="login()">Login</button>
-            <div style="text-align: center; margin-top: 16px;">
-                <a href="#" style="color: var(--text-sub); font-size: 13px;" onclick="toggleRegister()">Create an account</a>
-            </div>
-        </div>
-
-        <div class="auth-box hidden" id="registerBox">
-            <h2 style="text-align: center; margin-bottom: 24px;">Create Account</h2>
-            <div class="form-group"><label>Store ID</label><input type="text" id="regStoreId"></div>
-            <div class="form-group"><label>Store Name</label><input type="text" id="regStoreName"></div>
-            <div class="form-group"><label>Password</label><input type="password" id="regPassword"></div>
-            <button class="new-campaign-btn" onclick="register()">Register</button>
-            <div style="text-align: center; margin-top: 16px;">
-                <a href="#" style="color: var(--text-sub); font-size: 13px;" onclick="toggleRegister()">Back to Login</a>
+            <div id="authNotice" style="margin-top: 16px; font-size: 13px; color: var(--text-sub); line-height: 1.5; text-align: center;">
+                New here or forgot your password? Open the dashboard from your <strong>Shopify admin → Apps → Retner SmartPush → Open Dashboard</strong>. You can set a password in Settings.
             </div>
         </div>
     </div>
@@ -1096,6 +984,11 @@ app.get('/store-admin', async (req, res) => {
                         <input type="text" id="setLogoUrl" placeholder="https://example.com/logo.png">
                         <p style="font-size: 12px; color: #666; margin-top: 4px;">This logo will be used as the default notification icon.</p>
                     </div>
+                    <div class="form-group">
+                        <label>Contact Email</label>
+                        <input type="email" id="setStoreEmail" placeholder="you@yourstore.com">
+                        <p style="font-size: 12px; color: #666; margin-top: 4px;">Used as the sender contact for push services.</p>
+                    </div>
                     <div class="form-group" style="display: flex; align-items: center; justify-content: space-between; background: #f9fafb; padding: 15px; border-radius: 8px; border: 1px solid #eee; margin-top: 20px;">
                         <div>
                             <div style="font-weight: 600; font-size: 14px;">Bypass Custom Popup</div>
@@ -1110,298 +1003,32 @@ app.get('/store-admin', async (req, res) => {
                     <button class="new-campaign-btn" style="margin-top: 24px;" onclick="saveSettings()">Save Changes</button>
                     <div id="saveMsg" style="margin-top: 10px; font-weight: bold; color: green; display: none;">Saved Successfully!</div>
                 </div>
+
+                <div class="card" style="max-width: 600px; margin: 24px auto 0;">
+                    <h3>Dashboard Password</h3>
+                    <p style="font-size: 13px; color: #666; margin-top: 0;">Optional. Lets you log in at push-retner.vercel.app/store-admin without opening Shopify. Use at least 10 characters.</p>
+                    <div class="form-group">
+                        <label>New Password</label>
+                        <input type="password" id="setNewPassword" autocomplete="new-password" placeholder="At least 10 characters">
+                    </div>
+                    <button class="btn-action" onclick="savePassword()">Set Password</button>
+                    <div id="pwMsg" style="margin-top: 10px; font-size: 13px; display: none;"></div>
+                </div>
             </div>
 
-            <!-- AUTOMATIONS VIEW -->
+            <!-- AUTOMATIONS VIEW (rendered by /js/automations.js) -->
             <div id="view-automations" class="content-area hidden">
-                <div style="margin: 0 auto; max-width: 1200px;">
-                    <h3>Automations</h3>
-                    
-                    <div class="automations-grid">
-                        <!-- WELCOME CARD -->
-                        <div class="auto-card" id="card-welcome">
-                            <div class="auto-card-header">
-                                <div class="auto-icon"><i class="fas fa-hand-spock"></i></div>
-                                <div style="flex: 1;">
-                                     <div style="display: flex; gap: 8px; align-items: center;">
-                                        <h4>Welcome notifications</h4>
-                                        <span class="badge badge-inactive" id="badge-welcome">Inactive</span>
-                                     </div>
-                                     <p class="auto-desc">A sequence of notifications sent to the subscriber once they subscribe to your store notifications.</p>
-                                     <!-- Edit Area -->
-                                     <div id="welcome-edit-area" class="hidden" style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #eee;">
-                                          <input type="text" id="autoWelcomeTitle" class="input-sm" placeholder="Title">
-                                          <textarea id="autoWelcomeMsg" class="input-sm" placeholder="Message" rows="3"></textarea>
-                                          <button class="btn btn-primary btn-sm" onclick="saveAutomations()">Save Text</button>
-                                     </div>
-                                </div>
-                            </div>
-                            <div class="auto-stats">
-                                <div><span class="stat-num">0</span><span class="stat-lbl">Impressions</span></div>
-                                <div><span class="stat-num">0</span><span class="stat-lbl">Clicks</span></div>
-                            </div>
-                            
-                            <div class="auto-card-footer">
-                                <div id="welcome-status-text" style="font-size: 13px; color: #666;">Welcome notifications are deactivated.</div>
-                                <div style="display: flex; gap: 10px; align-items: center;">
-                                     <button class="btn-link hidden" id="btn-edit-welcome" onclick="toggleEditWelcome()">Edit</button>
-                                     <button class="btn-action" id="btn-toggle-welcome" onclick="toggleWelcome()">Activate</button>
-                                </div>
-                            </div>
-                        </div>
-
-                        <!-- ABANDONED CART CARD -->
-                        <div class="auto-card" id="card-abandoned">
-                             <div class="auto-card-header">
-                                <div class="auto-icon"><i class="fas fa-shopping-cart"></i></div>
-                                <div style="flex: 1;">
-                                     <div style="display: flex; gap: 8px; align-items: center;">
-                                        <h4>Abandoned cart recovery</h4>
-                                        <span class="badge badge-inactive" id="badge-abandoned">Inactive</span>
-                                     </div>
-                                     <p class="auto-desc">Remind subscribers about items they left in their cart.</p>
-                                     <!-- Edit Area -->
-                                     <div id="abandoned-edit-area" class="hidden" style="margin-top: 15px; padding-top: 15px; border-top: 1px solid #eee;">
-                                          <input type="text" id="autoAbandonedTitle" class="input-sm" placeholder="Title">
-                                          <textarea id="autoAbandonedMsg" class="input-sm" placeholder="Message" rows="3"></textarea>
-                                          <button class="btn btn-primary btn-sm" onclick="saveAutomations()">Save Text</button>
-                                     </div>
-                                </div>
-                            </div>
-                            <div class="auto-stats">
-                                <div><span class="stat-num">0</span><span class="stat-lbl">Impressions</span></div>
-                                <div><span class="stat-num">0</span><span class="stat-lbl">Clicks</span></div>
-                            </div>
-                            <div class="auto-card-footer">
-                                <div id="abandoned-status-text" style="font-size: 13px; color: #666;">Abandoned notifications are deactivated.</div>
-                                <div style="display: flex; gap: 10px; align-items: center;">
-                                     <button class="btn-link hidden" id="btn-edit-abandoned" onclick="toggleEditAbandoned()">Edit</button>
-                                     <button class="btn-action" id="btn-toggle-abandoned" onclick="toggleAbandoned()">Activate</button>
-                                </div>
-                            </div>
-                        </div>
-
-                        <!-- SHIPPING CARD -->
-                        <div class="auto-card" style="opacity: 0.7;">
-                             <div class="auto-card-header">
-                                <div class="auto-icon"><i class="fas fa-truck"></i></div>
-                                <div>
-                                     <div style="display: flex; gap: 8px; align-items: center;">
-                                        <h4>Shipping notifications</h4>
-                                        <span class="badge badge-inactive">Inactive</span>
-                                     </div>
-                                     <p class="auto-desc">Send updates when shipping status changes.</p>
-                                </div>
-                            </div>
-                             <div class="auto-card-footer">
-                                <div style="font-size: 13px; color: #666;">Coming Soon</div>
-                            </div>
-                        </div>
-                        
-                        <!-- PRICE DROP CARD -->
-                        <div class="auto-card" style="opacity: 0.7;">
-                             <div class="auto-card-header">
-                                <div class="auto-icon"><i class="fas fa-tag"></i></div>
-                                <div>
-                                     <div style="display: flex; gap: 8px; align-items: center;">
-                                        <h4>Price drop</h4>
-                                        <span class="badge badge-inactive">Inactive</span>
-                                     </div>
-                                     <p class="auto-desc">A notification sent whenever the price of a product is dropped.</p>
-                                </div>
-                            </div>
-                             <div class="auto-card-footer">
-                                <div style="font-size: 13px; color: #666;">Coming Soon</div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
+                <div id="automations-root"></div>
             </div>
-
-            <!-- AUTOMATION EDITOR (MULTI-STEP FLOW) -->
-            <div id="view-automation-editor" class="content-area hidden">
-                <style>
-                    .flow-column { display: flex; flex-direction: column; align-items: center; padding: 20px 10px; }
-                    .flow-step { width: 100%; background: #f9fafb; border: 1px solid #e5e7eb; border-radius: 8px; padding: 15px; cursor: pointer; transition: all 0.2s; position: relative; }
-                    .flow-step:hover { border-color: #2563EB; box-shadow: 0 2px 5px rgba(37,99,235,0.1); }
-                    .flow-step.active { border-color: #2563EB; background: #eff6ff; border-left: 4px solid #2563EB; }
-                    .flow-step.trigger { background: #fffbeb; border-color: #fcd34d; cursor: default; }
-                    .flow-line { width: 2px; height: 20px; background: #e5e7eb; margin: 5px 0; }
-                    .step-lbl { font-weight: 600; font-size: 14px; color: #111; }
-                    .step-meta { font-size: 12px; color: #666; margin-top: 4px; }
-                    .step-badge { position: absolute; top: 10px; right: 10px; font-size: 10px; padding: 2px 6px; border-radius: 10px; background: #eee; color: #666; }
-                    .step-badge.active { background: #dcfce7; color: #166534; }
-                </style>
-                
-                <div style="display: flex; gap: 15px; align-items: center; margin-bottom: 20px;">
-                    <button class="btn-secondary" onclick="switchView('automations')"><i class="fas fa-arrow-left"></i> Back</button>
-                    <h2 style="margin: 0;" id="editor-page-title">Abandoned Cart Recovery</h2>
-                    <span class="badge badge-inactive" id="editor-badge">Inactive</span>
-                </div>
-
-                <!-- STATS BAR -->
-                <div class="card" style="display: grid; grid-template-columns: repeat(4, 1fr); gap: 20px; padding: 20px; margin-bottom: 20px;">
-                    <div><div class="stat-lbl">Impressions</div><div class="stat-num" id="edit-stat-imp">0</div></div>
-                    <div><div class="stat-lbl">Clicks</div><div class="stat-num" id="edit-stat-clk">0</div></div>
-                    <div><div class="stat-lbl">Revenue</div><div class="stat-num" id="edit-stat-rev">₹0</div></div>
-                    <div><div class="stat-lbl">Active Reminders</div><div class="stat-num" id="edit-stat-active">1/3</div></div>
-                </div>
-
-                <!-- 3 COLUMNS: FLOW | EDITOR | PREVIEW -->
-                <div style="display: grid; grid-template-columns: 260px 1fr 360px; gap: 20px; align-items: start;">
-                    
-                    <!-- LEFT: FLOW BUILDER -->
-                    <div class="card flow-column">
-                         <div class="flow-step trigger">
-                             <div class="step-lbl"><i class="fas fa-shopping-cart"></i> Added to Cart</div>
-                             <div class="step-meta">Trigger Event</div>
-                         </div>
-                         <div class="flow-line"></div>
-                         
-                         <!-- Reminder 1 -->
-                         <div class="flow-step reminder active" id="step-card-0" onclick="selectReminder(0)">
-                             <div class="step-lbl">Reminder 1</div>
-                             <div class="step-meta" id="step-meta-0">Wait 20 Mins</div>
-                             <span class="step-badge active" id="step-badge-0">ON</span>
-                         </div>
-                         <div class="flow-line"></div>
-
-                         <!-- Reminder 2 -->
-                         <div class="flow-step reminder" id="step-card-1" onclick="selectReminder(1)">
-                             <div class="step-lbl">Reminder 2</div>
-                             <div class="step-meta" id="step-meta-1">Wait 10 Hours</div>
-                             <span class="step-badge" id="step-badge-1">OFF</span>
-                         </div>
-                         <div class="flow-line"></div>
-
-                         <!-- Reminder 3 -->
-                         <div class="flow-step reminder" id="step-card-2" onclick="selectReminder(2)">
-                             <div class="step-lbl">Reminder 3</div>
-                             <div class="step-meta" id="step-meta-2">Wait 24 Hours</div>
-                             <span class="step-badge" id="step-badge-2">OFF</span>
-                         </div>
-                    </div>
-
-                    <!-- MIDDLE: EDITOR FORM -->
-                    <div class="card">
-                        <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; border-bottom: 1px solid #eee; padding-bottom: 15px;">
-                            <h3 style="margin: 0;" id="editor-step-title">Edit Reminder 1</h3>
-                            
-                            <div style="display: flex; align-items: center; gap: 10px;">
-                                <span style="font-size: 13px; font-weight: 500;">Enable Step</span>
-                                <label class="switch">
-                                    <input type="checkbox" id="edit-step-enabled" onchange="updateStepStatus()">
-                                    <span class="slider"></span>
-                                </label>
-                            </div>
-                        </div>
-                        
-                        <!-- TIMING SETTINGS -->
-                        <div style="background: #f9fafb; padding: 15px; border-radius: 8px; border: 1px solid #eee; margin-bottom: 20px;">
-                            <div style="font-weight: 600; font-size: 13px; margin-bottom: 10px; color: #444;">WAIT TIME</div>
-                            <div style="display: flex; gap: 10px; align-items: center;">
-                                <span>Wait for</span>
-                                <input type="number" id="edit-delay-val" value="20" class="input-sm" style="width: 70px;" oninput="updateStepMeta()">
-                                <select id="edit-delay-unit" class="input-sm" style="width: 100px;" onchange="updateStepMeta()">
-                                    <option value="minutes">Minutes</option>
-                                    <option value="hours">Hours</option>
-                                    <option value="days">Days</option>
-                                </select>
-                            </div>
-                        </div>
-
-                        <!-- CONTENT SETTINGS -->
-                        <div class="form-group">
-                            <label>Notification Title</label>
-                            <input type="text" id="edit-auto-title" placeholder="We saved your items!" oninput="updateAutoPreview()">
-                        </div>
-                        
-                        <div class="form-group">
-                            <label>Message Body</label>
-                            <textarea id="edit-auto-msg" rows="3" placeholder="Return to cart..." oninput="updateAutoPreview()"></textarea>
-                        </div>
-
-                        <div class="form-group">
-                            <label>Hero Image URL (Optional)</label>
-                            <input type="text" id="edit-auto-img" placeholder="https://..." oninput="updateAutoPreview()">
-                        </div>
-
-                        <div style="margin-top: 20px; border-top: 1px solid #eee; padding-top: 20px;">
-                            <h4 style="margin: 0 0 15px 0;">Action Buttons</h4>
-                            <div class="grid" style="grid-template-columns: 1fr 1fr; gap: 15px;">
-                                <div>
-                                    <label style="font-size: 13px; font-weight: 500;">Button 1</label>
-                                    <input type="text" id="edit-auto-btn1" placeholder="Checkout" oninput="updateAutoPreview()">
-                                </div>
-                                <div>
-                                    <label style="font-size: 13px; font-weight: 500;">Button 2</label>
-                                    <input type="text" id="edit-auto-btn2" placeholder="View Store" oninput="updateAutoPreview()">
-                                </div>
-                            </div>
-                        </div>
-
-                        <!-- ACTIONS FOOTER -->
-                        <div style="margin-top: 30px; display: flex; justify-content: flex-end; gap: 10px; border-top: 1px solid #eee; padding-top: 20px;">
-                            <button class="btn-primary" style="width: 100%;" onclick="saveAutomationFull()">Save All & Activate</button>
-                        </div>
-                    </div>
-
-                    <!-- RIGHT: PREVIEW (STICKY) -->
-                    <div>
-                        <div class="card" style="position: sticky; top: 20px;">
-                            <h3 style="margin-top: 0; font-size: 16px; color: #666;">Live Preview</h3>
-                            
-                            <!-- ANDROID PREVIEW -->
-                            <div style="margin-top: 20px;">
-                                <div style="font-size: 12px; color: #999; margin-bottom: 5px;">Android</div>
-                                <div class="preview-box">
-                                    <div style="display: flex; gap: 10px; margin-bottom: 10px;">
-                                        <div style="width: 40px; height: 40px; background: #ddd; border-radius: 50%; overflow: hidden; display: flex; align-items: center; justify-content: center;">
-                                            <i class="fas fa-bell" style="color: #999;"></i>
-                                        </div>
-                                        <div>
-                                            <div style="font-weight: bold; font-size: 14px;" id="prev-auto-title">Title</div>
-                                            <div style="font-size: 12px; color: #666;" id="prev-auto-msg">Message...</div>
-                                        </div>
-                                    </div>
-                                    <img id="prev-auto-hero" src="" style="display: none; width: 100%; height: 120px; object-fit: cover; border-radius: 4px; margin-top: 8px;">
-                                    
-                                    <div style="display: flex; gap: 10px; margin-top: 10px; border-top: 1px solid #eee; padding-top: 8px;" id="prev-auto-btns">
-                                        <span style="font-size: 12px; font-weight: 600; color: #4338ca;" id="prev-auto-b1">BUTTON 1</span>
-                                        <span style="font-size: 12px; font-weight: 600; color: #4338ca;" id="prev-auto-b2">BUTTON 2</span>
-                                    </div>
-                                </div>
-                            </div>
-
-                            <!-- WINDOWS PREVIEW -->
-                            <div style="margin-top: 30px;">
-                                <div style="font-size: 12px; color: #999; margin-bottom: 5px;">Windows 10/11</div>
-                                <div style="background: #333; color: white; padding: 15px; border-radius: 0; font-family: 'Segoe UI', sans-serif; display: flex; gap: 15px;">
-                                     <div style="width: 40px; height: 40px; background: #555; display: flex; align-items: center; justify-content: center;">
-                                        <i class="fas fa-shopping-cart"></i>
-                                     </div>
-                                     <div style="flex: 1;">
-                                         <div style="font-weight: 600; font-size: 13px; margin-bottom: 4px;" id="prev-win-title">Title</div>
-                                         <div style="font-size: 12px; color: #ccc;" id="prev-win-msg">Message...</div>
-                                         <img id="prev-win-hero" src="" style="display: none; width: 100%; margin-top: 10px; border: 1px solid #444;">
-                                     </div>
-                                </div>
-                            </div>
-
-                        </div>
-                    </div>
-
-                </div>
-            </div>
-
         </div>
     </div>
 
     <script>
         // STATE
-        let injectedStore = ${injectedStore ? JSON.stringify(injectedStore) : 'null'};
+        let injectedStore = ${injectedStore ? JSON.stringify(injectedStore).replace(/</g, '\\u003c') : 'null'};
         let store = null;
-        
+        const initialView = new URLSearchParams(window.location.search).get('view');
+
         if (injectedStore) {
             store = injectedStore;
             try {
@@ -1414,7 +1041,43 @@ app.get('/store-admin', async (req, res) => {
                 window.history.replaceState({}, document.title, window.location.pathname);
             }
         } else {
-            store = JSON.parse(localStorage.getItem('store') || 'null');
+            try { store = JSON.parse(localStorage.getItem('store') || 'null'); } catch(e) { store = null; }
+            // Sessions from before the security update have no token: log in again.
+            if (store && !store.token) { localStorage.removeItem('store'); store = null; }
+        }
+
+        // Every /my-store/* call carries the session token; a 401 means the
+        // session expired, so we go back to the login screen.
+        function sessionExpired() {
+            localStorage.removeItem('store');
+            store = null;
+            document.getElementById('mainApp').classList.add('hidden');
+            document.getElementById('mainApp').style.display = 'none';
+            document.getElementById('authScreen').classList.remove('hidden');
+        }
+        const _nativeFetch = window.fetch.bind(window);
+        window.fetch = function (input, init) {
+            const url = typeof input === 'string' ? input : (input && input.url) || '';
+            if (url.indexOf('/my-store/') === 0 && store && store.token) {
+                init = Object.assign({}, init || {});
+                init.headers = Object.assign({}, init.headers || {}, { 'Authorization': 'Bearer ' + store.token });
+                return _nativeFetch(input, init).then(function (r) {
+                    if (r.status === 401) sessionExpired();
+                    return r;
+                });
+            }
+            return _nativeFetch(input, init);
+        };
+        async function apiFetch(path, options) {
+            const opts = Object.assign({}, options || {});
+            if (opts.body && typeof opts.body !== 'string') {
+                opts.body = JSON.stringify(opts.body);
+                opts.headers = Object.assign({ 'Content-Type': 'application/json' }, opts.headers || {});
+            }
+            const res = await window.fetch(path, opts);
+            let data = null;
+            try { data = await res.json(); } catch (e) { data = null; }
+            return { ok: res.ok, status: res.status, data: data || {} };
         }
         
         // INIT
@@ -1433,6 +1096,10 @@ app.get('/store-admin', async (req, res) => {
             document.getElementById('userInitials').innerText = store.name.charAt(0).toUpperCase();
 
             loadStats();
+            // Deep link from the Shopify app, e.g. ?view=automations
+            if (initialView && ['automations', 'campaign', 'history', 'subscribers', 'settings'].indexOf(initialView) !== -1) {
+                switchView(initialView);
+            }
         }
 
         // NAVIGATION
@@ -1618,15 +1285,14 @@ app.get('/store-admin', async (req, res) => {
             btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Processing...';
             btn.disabled = true;
             try {
-                const res = await fetch('/api/run-scheduler');
+                const res = await fetch('/my-store/run-automations', { method: 'POST' });
                 const data = await res.json();
-                if(data.debug) {
-                    alert('✅ Processed: ' + (data.processed || 0) + 
-                          '\\nServer Time (UTC): ' + data.debug.serverTime + 
-                          '\\nPending Due: ' + data.debug.pendingMatch + 
-                          '\\nTotal Scheduled: ' + data.debug.totalScheduled);
+                if (data.success) {
+                    alert('✅ Done. Scheduled campaigns sent: ' + (data.summary.scheduledCampaigns || 0) +
+                          '\\nAutomation notifications sent: ' + ((data.summary.abandoned || 0) + (data.summary.browse || 0) + (data.summary.winback || 0)) +
+                          '\\n(This also runs automatically every 5 minutes.)');
                 } else {
-                    alert('✅ Processed ' + (data.processed || 0) + ' pending campaigns.');
+                    alert('Could not run now: ' + (data.error || 'unknown error'));
                 }
                 loadCampaignHistory();
             } catch(e) { alert('Error: ' + e.message); }
@@ -1741,16 +1407,22 @@ app.get('/store-admin', async (req, res) => {
             const data = await res.json();
             const tbody = document.getElementById('subscribersTableBody');
             tbody.innerHTML = '';
+            const rows = [];
 
             data.subscribers.forEach((sub, index) => {
                 const date = sub.createdAt ? new Date(sub.createdAt).toLocaleDateString() : 'N/A';
                 const idShort = 'User-' + (index + 1);
-                tbody.innerHTML += '<tr style="border-bottom: 1px solid #eee;">' +
+                const expired = sub.status === 'expired';
+                rows.push('<tr style="border-bottom: 1px solid #eee;">' +
                     '<td style="padding: 10px; color: #666;">' + date + '</td>' +
                     '<td style="padding: 10px; font-weight: 500;">' + idShort + '</td>' +
-                    '<td style="padding: 10px;"><span style="background: #cbf4c9; color: #007f5f; padding: 2px 8px; border-radius: 10px; font-size: 12px;">Active</span></td>' +
-                '</tr>';
+                    '<td style="padding: 10px;"><span style="background: ' + (expired ? '#f1f1f1' : '#cbf4c9') + '; color: ' + (expired ? '#6d7175' : '#007f5f') + '; padding: 2px 8px; border-radius: 10px; font-size: 12px;">' + (expired ? 'Unsubscribed' : 'Active') + '</span></td>' +
+                '</tr>');
             });
+            tbody.innerHTML = rows.join('');
+            if (data.total && data.total > data.subscribers.length) {
+                tbody.innerHTML += '<tr><td colspan="3" style="padding: 12px; text-align: center; color: #666; font-size: 13px;">Showing the latest ' + data.subscribers.length + ' of ' + data.total + ' subscribers.</td></tr>';
+            }
              if(data.subscribers.length === 0) {
                  tbody.innerHTML = '<tr><td colspan="3" style="padding: 20px; text-align: center;">No subscribers yet.</td></tr>';
              }
@@ -1934,28 +1606,14 @@ app.get('/store-admin', async (req, res) => {
             location.reload();
         }
 
-        function toggleRegister() {
-            document.getElementById('loginBox').classList.toggle('hidden');
-            document.getElementById('registerBox').classList.toggle('hidden');
-        }
-
-        async function register() {
-            const storeId = document.getElementById('regStoreId').value;
-            const storeName = document.getElementById('regStoreName').value;
-            const password = document.getElementById('regPassword').value;
-
-            const res = await fetch('/store-register', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ storeId, password, storeName })
-            });
-            const data = await res.json();
-            if(data.success) {
-                alert('Account created!');
-                toggleRegister();
-            } else {
-                alert(data.error);
-            }
+        async function savePassword() {
+            const input = document.getElementById('setNewPassword');
+            const msg = document.getElementById('pwMsg');
+            const res = await apiFetch('/my-store/set-password', { method: 'POST', body: { password: input.value } });
+            msg.style.display = 'block';
+            msg.style.color = res.data.success ? 'green' : '#b91c1c';
+            msg.innerText = res.data.success ? 'Password saved. You can now log in with your store ID and this password.' : (res.data.error || 'Could not save password');
+            if (res.data.success) input.value = '';
         }
 
         async function loadSettings() {
@@ -2005,396 +1663,10 @@ app.get('/store-admin', async (req, res) => {
                 alert('Error: ' + data.error);
             }
         }
-        /* Automation Logic Updated */
-        let automationState = { 
-            welcome: false, 
-            abandoned: false,
-            // Default 3-step config
-            abandonedConfig: [
-                { id: 0, delay: 20, unit: 'minutes', title: 'We saved your items!', body: 'Complete your purchase now.', enabled: true, btn1: 'Checkout', btn2: 'View Store' },
-                { id: 1, delay: 10, unit: 'hours', title: 'Still thinking about it?', body: 'Your cart is waiting for you.', enabled: false, btn1: 'Checkout', btn2: 'View Store'  },
-                { id: 2, delay: 1, unit: 'days', title: 'Last chance!', body: 'Your cart will expire soon.', enabled: false, btn1: 'Checkout', btn2: 'View Store'  }
-            ]
-        };
-        let currentReminderIndex = 0;
-
-        /* WELCOME FUNCTIONS */
-        function toggleEditWelcome() {
-             document.getElementById('welcome-edit-area').classList.toggle('hidden');
-        }
-
-        function toggleWelcome() {
-            automationState.welcome = !automationState.welcome;
-            updateWelcomeCardUI();
-            saveAutomations();
-        }
-
-        function updateWelcomeCardUI() {
-            const enabled = automationState.welcome;
-            const badge = document.getElementById('badge-welcome');
-            if(badge) {
-                badge.className = enabled ? 'badge badge-active' : 'badge badge-inactive';
-                badge.innerText = enabled ? 'Active' : 'Inactive';
-            }
-            const txt = document.getElementById('welcome-status-text');
-            if(txt) txt.innerText = enabled ? 'Welcome notifications are activated.' : 'Welcome notifications are deactivated.';
-            
-            const btn = document.getElementById('btn-toggle-welcome');
-            if(btn) btn.innerText = enabled ? 'Deactivate' : 'Activate';
-            
-            const editBtn = document.getElementById('btn-edit-welcome');
-            if(editBtn) {
-                if(enabled) editBtn.classList.remove('hidden'); else editBtn.classList.add('hidden');
-            }
-            if(!enabled) document.getElementById('welcome-edit-area').classList.add('hidden');
-        }
-
-        /* ABANDONED CART FUNCTIONS - MULTI STEP FLOW */
-        function openAutomationEditor(type) {
-            if(type !== 'abandoned') return;
-            switchView('automation-editor');
-            
-            // Sync Top Status
-            const enabled = automationState.abandoned;
-            const badge = document.getElementById('editor-badge');
-            badge.className = enabled ? 'badge badge-active' : 'badge badge-inactive';
-            badge.innerText = enabled ? 'Active' : 'Inactive';
-            
-            // Select First Reminder by Default
-            selectReminder(0);
-            updateFlowVisuals();
-        }
-
-        function selectReminder(index) {
-            // 1. Save changes from current index before switching (if we were editing one)
-            saveCurrentStepToState();
-
-            // 2. Switch Index
-            currentReminderIndex = index;
-
-            // 3. Load Data for new Index
-            const data = automationState.abandonedConfig[index];
-            
-            document.getElementById('editor-step-title').innerText = 'Edit Reminder ' + (index + 1);
-            
-            document.getElementById('edit-delay-val').value = data.delay;
-            document.getElementById('edit-delay-unit').value = data.unit;
-            document.getElementById('edit-step-enabled').checked = data.enabled;
-            
-            document.getElementById('edit-auto-title').value = data.title;
-            document.getElementById('edit-auto-msg').value = data.body;
-            document.getElementById('edit-auto-img').value = data.image || '';
-            document.getElementById('edit-auto-btn1').value = data.btn1 || 'Checkout';
-            document.getElementById('edit-auto-btn2').value = data.btn2 || 'View Store';
-
-            // 4. Update UI
-            updateFlowVisuals();
-            updateAutoPreview();
-        }
-
-        function saveCurrentStepToState() {
-            const idx = currentReminderIndex;
-            const config = automationState.abandonedConfig[idx];
-            
-            config.delay = document.getElementById('edit-delay-val').value;
-            config.unit = document.getElementById('edit-delay-unit').value;
-            config.enabled = document.getElementById('edit-step-enabled').checked;
-            config.title = document.getElementById('edit-auto-title').value;
-            config.body = document.getElementById('edit-auto-msg').value;
-            config.image = document.getElementById('edit-auto-img').value;
-            config.btn1 = document.getElementById('edit-auto-btn1').value;
-            config.btn2 = document.getElementById('edit-auto-btn2').value;
-        }
-
-        function updateFlowVisuals() {
-            // Update the Left Sidebar Cards
-            automationState.abandonedConfig.forEach((step, i) => {
-                const card = document.getElementById('step-card-' + i);
-                const meta = document.getElementById('step-meta-' + i);
-                const badge = document.getElementById('step-badge-' + i);
-                
-                // Active Selection
-                if(i === currentReminderIndex) card.classList.add('active');
-                else card.classList.remove('active');
-
-                // Meta Info
-                meta.innerText = 'Wait ' + step.delay + ' ' + step.unit;
-                
-                // ON/OFF Badge
-                if(step.enabled) {
-                    badge.classList.add('active');
-                    badge.innerText = 'ON';
-                } else {
-                    badge.classList.remove('active');
-                    badge.innerText = 'OFF';
-                }
-            });
-            
-            // Update Header Stats
-            const activeCount = automationState.abandonedConfig.filter(s => s.enabled).length;
-            document.getElementById('edit-stat-active').innerText = activeCount + '/3';
-        }
-
-        // Called when inputs change
-        function updateStepMeta() {
-            const val = document.getElementById('edit-delay-val').value;
-            const unit = document.getElementById('edit-delay-unit').value;
-            const meta = document.getElementById('step-meta-' + currentReminderIndex);
-            if(meta) meta.innerText = 'Wait ' + val + ' ' + unit;
-        }
-        
-        function updateStepStatus() {
-            const enabled = document.getElementById('edit-step-enabled').checked;
-            const badge = document.getElementById('step-badge-' + currentReminderIndex);
-            if(enabled) {
-                badge.classList.add('active');
-                badge.innerText = 'ON';
-            } else {
-                badge.classList.remove('active');
-                badge.innerText = 'OFF';
-            }
-            updateFlowVisuals(); // Update counts
-        }
-
-        function updateAutoPreview() {
-            const title = document.getElementById('edit-auto-title').value;
-            const msg = document.getElementById('edit-auto-msg').value;
-            const img = document.getElementById('edit-auto-img').value;
-            const btn1 = document.getElementById('edit-auto-btn1').value || 'CHECKOUT';
-            const btn2 = document.getElementById('edit-auto-btn2').value || 'VIEW STORE';
-
-            // Android
-            document.getElementById('prev-auto-title').innerText = title || 'Title';
-            document.getElementById('prev-auto-msg').innerText = msg || 'Message...';
-            document.getElementById('prev-auto-b1').innerText = btn1.toUpperCase();
-            document.getElementById('prev-auto-b2').innerText = btn2.toUpperCase();
-            
-            const pHero = document.getElementById('prev-auto-hero');
-            if(img) { pHero.src = img; pHero.style.display = 'block'; } else { pHero.style.display = 'none'; }
-
-            // Windows
-            document.getElementById('prev-win-title').innerText = title || 'Title';
-            document.getElementById('prev-win-msg').innerText = msg || 'Message...';
-            const wHero = document.getElementById('prev-win-hero');
-             if(img) { wHero.src = img; wHero.style.display = 'block'; } else { wHero.style.display = 'none'; }
-        }
-
-        function updateAbandonedCardUI() {
-            const enabled = automationState.abandoned;
-            const badge = document.getElementById('badge-abandoned');
-            if(badge) {
-                badge.className = enabled ? 'badge badge-active' : 'badge badge-inactive';
-                badge.innerText = enabled ? 'Active' : 'Inactive';
-            }
-            const txt = document.getElementById('abandoned-status-text');
-            if(txt) txt.innerText = enabled ? 'Abandoned notifications are activated.' : 'Abandoned notifications are deactivated.';
-            
-            const btn = document.getElementById('btn-toggle-abandoned');
-            if(btn) {
-                btn.innerText = enabled ? 'Edit Settings' : 'Activate';
-                btn.className = 'btn-action';
-                btn.onclick = () => openAutomationEditor('abandoned'); 
-            }
-            const editBtn = document.getElementById('btn-edit-abandoned');
-            if(editBtn) editBtn.style.display = 'none'; 
-            document.getElementById('abandoned-edit-area').classList.add('hidden');
-        }
-
-        async function saveAutomationFull() {
-            // Save current Step first
-            saveCurrentStepToState();
-
-            const btn = document.querySelector('#view-automation-editor .btn-primary');
-            const originalText = btn.innerText;
-            btn.innerText = 'Saving...';
-            btn.disabled = true;
-
-            const config = automationState.abandonedConfig;
-            // Use Reminder 1 for the main dashboard display fallback
-            const mainTitle = config[0].title;
-            const mainBody = config[0].body;
-            
-            try {
-                // Determine if overall enabled (if at least one reminder is ON)
-                const isAnyEnabled = config.some(c => c.enabled);
-                automationState.abandoned = isAnyEnabled;
-
-                const res = await fetch('/my-store/update-automations', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ 
-                        storeId: store.id, 
-                        welcomeEnabled: automationState.welcome, 
-                        welcomeTitle: document.getElementById('autoWelcomeTitle').value, 
-                        welcomeBody: document.getElementById('autoWelcomeMsg').value,
-                        abandonedEnabled: isAnyEnabled,
-                        abandonedTitle: mainTitle,
-                        abandonedBody: mainBody,
-                        abandonedConfig: config // Send Full JSON
-                    })
-                });
-                const data = await res.json();
-                if(data.success) {
-                    btn.innerText = 'Saved!';
-                    setTimeout(() => {
-                        btn.innerText = originalText;
-                        btn.disabled = false;
-                        switchView('automations'); // Return to list
-                        updateAbandonedCardUI(); // Refresh UI
-                    }, 1000);
-                } else {
-                    alert('Error: ' + data.error);
-                    btn.disabled = false;
-                    btn.innerText = originalText;
-                }
-            } catch(e) {
-                alert('Connection Error');
-                btn.disabled = false;
-                btn.innerText = originalText;
-            }
-        }
-
-        async function loadAutomations() {
-            const res = await fetch('/my-store/automations?storeId=' + store.id);
-            const data = await res.json();
-            if(data.success && data.automations) {
-                // Welcome
-                automationState.welcome = data.automations.welcome_enabled;
-                document.getElementById('autoWelcomeTitle').value = data.automations.welcome_title || '';
-                document.getElementById('autoWelcomeMsg').value = data.automations.welcome_body || '';
-                
-                const wCard = document.getElementById('card-welcome');
-                if(wCard) {
-                    const stats = wCard.querySelectorAll('.stat-num');
-                    if(stats.length >= 2) {
-                        stats[0].innerText = data.automations.welcome_sent_count || 0;
-                        stats[1].innerText = data.automations.welcome_click_count || 0;
-                    }
-                }
-                updateWelcomeCardUI();
-
-                // Abandoned - Load Config
-                automationState.abandoned = data.automations.abandoned_enabled;
-                
-                if (data.automations.abandoned_config) {
-                    try {
-                        // DEBUG ALERTS
-                        // alert("RAW FROM DB: " + data.automations.abandoned_config);
-                        
-                        let parsed = data.automations.abandoned_config;
-                        if (typeof parsed === 'string') {
-                            parsed = JSON.parse(parsed);
-                        }
-                        if (typeof parsed === 'string') {
-                            parsed = JSON.parse(parsed);
-                        }
-                        
-                        // alert("PARSED: " + JSON.stringify(parsed));
-
-                        if(parsed && Array.isArray(parsed)) {
-                            automationState.abandonedConfig = parsed;
-                            // Update Step 1 Meta immediately
-                            const step0 = parsed[0];
-                            if(step0) {
-                                document.getElementById('edit-delay-val').value = step0.delay;
-                                document.getElementById('edit-delay-unit').value = step0.unit;
-                                
-                                // FORCE ENABLE STATUS SYNC
-                                document.getElementById('edit-step-enabled').checked = step0.enabled;
-                                
-                                updateStepMeta();
-                                updateStepStatus(); // Sync Visuals
-                            }
-                        }
-                    } catch(e) { 
-                        console.error('JSON Error', e);
-                        alert("JSON Error: " + e.message);
-                    }
-                } else {
-                    // Backwards Compatibility: Migration
-                    // If we have old title/body but no config, map it to Reminder 1
-                    if(data.automations.abandoned_title) {
-                         automationState.abandonedConfig[0].title = data.automations.abandoned_title;
-                         automationState.abandonedConfig[0].body = data.automations.abandoned_body;
-                         automationState.abandonedConfig[0].enabled = data.automations.abandoned_enabled;
-                    }
-                }
-
-                // Update UI elements for legacy cards (if visible)
-                const abTitle = document.getElementById('autoAbandonedTitle');
-                if(abTitle) abTitle.value = data.automations.abandoned_title || '';
-                const abMsg = document.getElementById('autoAbandonedMsg');
-                if(abMsg) abMsg.value = data.automations.abandoned_body || '';
-
-                const aCard = document.getElementById('card-abandoned');
-                if(aCard) {
-                    const stats = aCard.querySelectorAll('.stat-num');
-                    if(stats.length >= 2) {
-                        stats[0].innerText = data.automations.abandoned_sent_count || 0;
-                        stats[1].innerText = data.automations.abandoned_click_count || 0;
-                    }
-                }
-                updateAbandonedCardUI();
-            }
-        }
-
-        async function saveAutomations() {
-            // Helper to show saving state on active edit button
-            let activeBtn = null;
-            if(!document.getElementById('welcome-edit-area').classList.contains('hidden')) {
-                 activeBtn = document.querySelector('#welcome-edit-area button');
-            } else if (!document.getElementById('abandoned-edit-area').classList.contains('hidden')) {
-                 activeBtn = document.querySelector('#abandoned-edit-area button');
-            }
-
-            const originalText = activeBtn ? activeBtn.innerText : 'Save Text';
-            if(activeBtn) {
-                activeBtn.innerText = 'Saving...';
-                activeBtn.disabled = true;
-            }
-
-            const welcomeTitle = document.getElementById('autoWelcomeTitle').value;
-            const welcomeBody = document.getElementById('autoWelcomeMsg').value;
-            const abandonedTitle = document.getElementById('autoAbandonedTitle') ? document.getElementById('autoAbandonedTitle').value : '';
-            const abandonedBody = document.getElementById('autoAbandonedMsg') ? document.getElementById('autoAbandonedMsg').value : '';
-            
-            try {
-                const res = await fetch('/my-store/update-automations', {
-                    method: 'POST',
-                    headers: {'Content-Type': 'application/json'},
-                    body: JSON.stringify({ 
-                        storeId: store.id, 
-                        welcomeEnabled: automationState.welcome, 
-                        welcomeTitle, 
-                        welcomeBody,
-                        abandonedEnabled: automationState.abandoned,
-                        abandonedTitle,
-                        abandonedBody
-                    })
-                });
-                const data = await res.json();
-                
-                if(activeBtn) {
-                    if(data.success) {
-                        activeBtn.innerText = 'Saved!';
-                        setTimeout(() => {
-                            activeBtn.innerText = originalText;
-                            activeBtn.disabled = false;
-                            // Auto Close
-                            if(activeBtn.parentElement) activeBtn.parentElement.classList.add('hidden');
-                        }, 1500);
-                    } else {
-                        alert('Error: ' + data.error);
-                        activeBtn.innerText = originalText;
-                        activeBtn.disabled = false;
-                    }
-                }
-            } catch(e) {
-                if(activeBtn) {
-                    activeBtn.innerText = originalText;
-                    activeBtn.disabled = false;
-                }
-                alert('Connection Error');
+        /* Automations UI lives in /js/automations.js */
+        function loadAutomations() {
+            if (window.RetnerAutomations) {
+                window.RetnerAutomations.mount(document.getElementById("automations-root"), { store: store, api: apiFetch });
             }
         }
     </script>
@@ -2402,9 +1674,13 @@ app.get('/store-admin', async (req, res) => {
 </html>`);
 });
 
+// Every /my-store/* route requires a valid store session; the store id is
+// taken from the session token (see auth.requireStore).
+app.use('/my-store', auth.requireStore);
+
 // Stats API
 app.get('/my-store/stats', async (req, res) => {
-    const { storeId } = req.query;
+    const storeId = req.storeId; // from the session token
     try {
         await initCampaignTable(); // Ensure columns exist (Migration)
         const db = getPool();
@@ -2437,7 +1713,7 @@ app.get('/my-store/stats', async (req, res) => {
 
 // Campaign History API
 app.get('/my-store/campaigns', async (req, res) => {
-    const { storeId } = req.query;
+    const storeId = req.storeId; // from the session token
     try {
         await initCampaignTable(); // Ensure table exists
         const db = getPool();
@@ -2447,10 +1723,13 @@ app.get('/my-store/campaigns', async (req, res) => {
 });
 
 app.get('/my-store/subscribers', async (req, res) => {
-    const { storeId } = req.query;
     try {
-        const subscribers = await SubscriptionModel.findByStore(storeId);
-        res.json({ subscribers });
+        const db = getPool();
+        const [list, total] = await Promise.all([
+            db.query(`SELECT created_at AS "createdAt", COALESCE(status, 'active') AS status FROM subscriptions WHERE store_id = $1 ORDER BY created_at DESC NULLS LAST LIMIT 500`, [req.storeId]),
+            db.query(`SELECT COUNT(*)::int AS n FROM subscriptions WHERE store_id = $1`, [req.storeId]),
+        ]);
+        res.json({ subscribers: list.rows, total: total.rows[0].n });
     } catch (e) { res.status(500).json({ subscribers: [] }); }
 });
 
@@ -2459,7 +1738,7 @@ app.get('/my-store/subscribers', async (req, res) => {
 /* -------------------------------------------------------------------------- */
 /*                     ABANDONED CART WEBHOOK (New)                           */
 /* -------------------------------------------------------------------------- */
-app.post('/webhooks/shopify/checkouts', async (req, res) => {
+app.post('/webhooks/shopify/checkouts', verifyShopifyWebhook, async (req, res) => {
     // console.log('Checkout Hook Recieved'); // Debug
     const shopDomain = req.headers['x-shopify-shop-domain'];
     if (!shopDomain) return res.status(200).send('No Shop Header');
@@ -2502,401 +1781,194 @@ app.post('/webhooks/shopify/checkouts', async (req, res) => {
 
 // Broadcast API
 app.post('/my-store/broadcast', async (req, res) => {
-    const { storeId, title, message, url, image, icon, type, scheduledAt, expiryAt, btn1Text, btn1UrlRaw, btn2Text, btn2UrlRaw } = req.body;
+    const storeId = req.storeId;
+    const { title, message, url, image, type, scheduledAt, expiryAt, btn1Text, btn1UrlRaw, btn2Text, btn2UrlRaw } = req.body || {};
     try {
+        if (!title || !message) return res.status(400).json({ success: false, error: 'Title and message are required.' });
         const db = getPool();
-        let finalIcon = icon;
-        // Default subject (as requested)
-        let finalSubject = 'mailto:Koregrowtech@gmail.com';
 
-        // Fetch Store Details (Logo & Email)
-        const storeRes = await db.query('SELECT logo_url, store_email FROM stores WHERE store_id = $1', [storeId]);
-        if (storeRes.rows.length > 0) {
-            const s = storeRes.rows[0];
-            // Logo Logic
-            if (!finalIcon && s.logo_url) finalIcon = s.logo_url;
-            // Email Logic
-            if (s.store_email) finalSubject = 'mailto:' + s.store_email;
-        }
-
-        if (!finalIcon) finalIcon = 'https://cdn-icons-png.flaticon.com/512/733/733585.png';
-
-        // Migration: Ensure Columns Exist
-        try {
-            await db.query(`ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS type TEXT DEFAULT 'regular'`);
-            await db.query(`ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS scheduled_at TIMESTAMP`);
-            await db.query(`ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS expiry_at TIMESTAMP`);
-            await db.query(`ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS status TEXT DEFAULT 'sent'`);
-        } catch (err) { console.log('Migration error (ignorable):', err.message); }
-
-        // Insert campaign first to get an ID for tracking
+        // Insert the campaign first: its id is used for click/revenue tracking.
         const insertResult = await db.query(
-            `INSERT INTO campaigns (store_id, title, message, url, image, status, type, scheduled_at, expiry_at, sent_count) 
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 0) RETURNING id`,
-            [storeId, title, message, url, image, scheduledAt ? 'scheduled' : 'sent', type || 'regular', scheduledAt, expiryAt]
+            `INSERT INTO campaigns (store_id, title, message, url, image, status, type, scheduled_at, expiry_at, sent_count, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, 0, NOW()) RETURNING *`,
+            [storeId, String(title).slice(0, 120), String(message).slice(0, 500), url || null,
+             (image && !String(image).startsWith('data:')) ? image : null,
+             scheduledAt ? 'scheduled' : 'sending', type || 'regular', scheduledAt || null, expiryAt || null]
         );
-        const campId = insertResult.rows[0].id; // Get the generated ID
+        const camp = insertResult.rows[0];
 
-        // UTM Tracking Helper
-        const appendUTM = (originalUrl, campaignId) => {
-            if (!originalUrl) return originalUrl;
-            const sep = originalUrl.indexOf('?') !== -1 ? '&' : '?';
-            const campaign = encodeURIComponent(title.replace(/\s+/g, '-').toLowerCase());
-            return originalUrl + sep + 'utm_source=push-retner&utm_medium=push&utm_campaign=push_camp_' + campaignId;
-        };
-
-        const finalUrl = appendUTM(url, campId);
-
-        // Tracking Helper
-        const createTrackingUrl = (destUrl, cid) => {
-            const baseUrl = process.env.APP_URL || 'https://push-retner.vercel.app';
-            return `${baseUrl}/track-click?url=${encodeURIComponent(destUrl)}&c=${cid}`;
-        };
-
-        const trackedMainUrl = createTrackingUrl(finalUrl, campId);
-
-        const actions = [];
-        if (btn1Text) actions.push({ action: createTrackingUrl(appendUTM(btn1UrlRaw || url, campId), campId), title: btn1Text });
-        if (btn2Text) actions.push({ action: createTrackingUrl(appendUTM(btn2UrlRaw || url, campId), campId), title: btn2Text });
-
-        // CHECK IF SCHEDULED (Future)
-        if (scheduledAt) {
-            const scheduleDate = new Date(scheduledAt);
-            if (scheduleDate > new Date()) {
-                // Campaign already saved as 'scheduled' above.
-                return res.json({ success: true, sent: 0, status: 'scheduled' });
-            }
+        if (scheduledAt && new Date(scheduledAt) > new Date()) {
+            return res.json({ success: true, sent: 0, status: 'scheduled' });
         }
 
-        // SEND IMMEDIATELY
-        const subs = await SubscriptionModel.findByStore(storeId);
-
-        const options = {
-            vapidDetails: {
-                subject: finalSubject,
-                publicKey: process.env.PUBLIC_KEY,
-                privateKey: process.env.PRIVATE_KEY,
-            }
-        };
-
-        // Calculate TTL (Time To Live) if Expiry is set
-        if (expiryAt) {
-            const ttlSeconds = Math.floor((new Date(expiryAt).getTime() - Date.now()) / 1000);
-            if (ttlSeconds > 0) {
-                options.TTL = ttlSeconds;
-            }
-        }
-
-        // Fix: Ensure Icon is not Base64 (too large)
-        let safeIcon = 'https://cdn-icons-png.flaticon.com/512/3119/3119338.png';
-        if (finalIcon && !finalIcon.startsWith('data:') && finalIcon.length < 500) {
-            safeIcon = finalIcon;
-        }
-
-        const payload = JSON.stringify({
-            title,
-            body: message,
-            icon: safeIcon,
-            image: (image && !image.startsWith('data:')) ? image : null,
-            badge: 'https://cdn-icons-png.flaticon.com/512/3119/3119338.png',
-            data: {
-                id: campId,
-                url: trackedMainUrl,
-                expiryAt,
-                type
-            }
-        });
-
-        let sent = 0;
-        let lastError = null;
-        for (const sub of subs) {
-            try {
-                await webPush.sendNotification(
-                    { endpoint: sub.endpoint, keys: sub.keys },
-                    payload,
-                    options
-                );
-                sent++;
-            } catch (e) {
-                console.error('Push failed', e.message);
-                lastError = e.message;
-                if (e.statusCode) lastError += ` (Status: ${e.statusCode})`;
-                if (e.body) lastError += ` [${e.body}]`;
-            }
-        }
-
-        // Update History (Sent Count)
-        try {
-            await db.query(
-                `UPDATE campaigns SET sent_count = $1, status = 'sent' WHERE id = $2`,
-                [sent, campId]
-            );
-        } catch (dbErr) { console.error('Failed to update campaign history:', dbErr); }
-
-        res.json({ success: true, sent, status: 'sent', lastError });
-    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+        const store = (await automations.loadStore(db, storeId)) || { store_id: storeId };
+        const result = await automations.sendCampaign(
+            { db, webPush },
+            store,
+            camp,
+            { btn1Text, btn1Url: btn1UrlRaw, btn2Text, btn2Url: btn2UrlRaw }
+        );
+        res.json({ success: true, sent: result.sent, total: result.total, status: 'sent', lastError: result.lastError });
+    } catch (e) {
+        console.error('Broadcast error:', e.message);
+        res.status(500).json({ success: false, error: 'Could not send the campaign. Please try again.' });
+    }
 });
 
 /* Settings API */
 app.get('/my-store/details', async (req, res) => {
-    const { storeId } = req.query;
     try {
         const db = getPool();
-        // Ensure email col exists
-        try { await db.query('ALTER TABLE stores ADD COLUMN IF NOT EXISTS store_email TEXT'); } catch (e) { }
-
-        const result = await db.query('SELECT store_name, logo_url, store_email, direct_prompt_enabled FROM stores WHERE store_id = $1', [storeId]);
+        const result = await db.query('SELECT store_name, logo_url, store_email, direct_prompt_enabled FROM stores WHERE store_id = $1', [req.storeId]);
         if (result.rows.length > 0) {
             res.json({ success: true, store: result.rows[0] });
         } else {
             res.json({ success: false, error: 'Store not found' });
         }
-    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+    } catch (e) { res.status(500).json({ success: false, error: 'Server error' }); }
 });
 
 app.post('/my-store/update-settings', async (req, res) => {
-    const { storeId, storeName, logoUrl, storeEmail, directPromptEnabled } = req.body;
+    const { storeName, logoUrl, storeEmail, directPromptEnabled } = req.body || {};
     try {
-        const db = getPool();
-        await db.query('UPDATE stores SET store_name = $1, logo_url = $2, store_email = $3, direct_prompt_enabled = $4 WHERE store_id = $5', [storeName, logoUrl, storeEmail, directPromptEnabled || false, storeId]);
+        if (logoUrl && !/^https:\/\/.{3,490}$/.test(String(logoUrl))) {
+            return res.status(400).json({ success: false, error: 'Logo URL must start with https://' });
+        }
+        if (storeEmail && !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(String(storeEmail))) {
+            return res.status(400).json({ success: false, error: 'Please enter a valid email.' });
+        }
+        await getPool().query(
+            'UPDATE stores SET store_name = $1, logo_url = $2, store_email = $3, direct_prompt_enabled = $4 WHERE store_id = $5',
+            [String(storeName || req.storeId).slice(0, 100), logoUrl || null, storeEmail || null, !!directPromptEnabled, req.storeId]
+        );
         res.json({ success: true });
-    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
+    } catch (e) { res.status(500).json({ success: false, error: 'Server error' }); }
 });
 
-/* Automation API */
+app.post('/my-store/set-password', async (req, res) => {
+    const password = req.body && req.body.password;
+    const problem = auth.validateNewPassword(password);
+    if (problem) return res.status(400).json({ success: false, error: problem });
+    try {
+        await getPool().query('UPDATE stores SET password = $2 WHERE store_id = $1', [req.storeId, auth.hashPassword(password)]);
+        res.json({ success: true });
+    } catch (e) { res.status(500).json({ success: false, error: 'Server error' }); }
+});
+
 /* Automation API */
 app.get('/my-store/automations', async (req, res) => {
-    const { storeId } = req.query;
     try {
-        const db = getPool();
-        // Ensure columns exist (Migration)
-        await db.query(`ALTER TABLE stores ADD COLUMN IF NOT EXISTS welcome_enabled BOOLEAN DEFAULT FALSE`);
-        await db.query(`ALTER TABLE stores ADD COLUMN IF NOT EXISTS welcome_title TEXT`);
-        await db.query(`ALTER TABLE stores ADD COLUMN IF NOT EXISTS welcome_body TEXT`);
-        await db.query(`ALTER TABLE stores ADD COLUMN IF NOT EXISTS welcome_sent_count INT DEFAULT 0`);
-        await db.query(`ALTER TABLE stores ADD COLUMN IF NOT EXISTS welcome_click_count INT DEFAULT 0`);
-
-        // Abandoned Cart Columns
-        await db.query(`ALTER TABLE stores ADD COLUMN IF NOT EXISTS abandoned_enabled BOOLEAN DEFAULT FALSE`);
-        await db.query(`ALTER TABLE stores ADD COLUMN IF NOT EXISTS abandoned_title TEXT`);
-        await db.query(`ALTER TABLE stores ADD COLUMN IF NOT EXISTS abandoned_body TEXT`);
-        await db.query(`ALTER TABLE stores ADD COLUMN IF NOT EXISTS abandoned_config TEXT`); // JSON for 3 reminders
-        await db.query(`ALTER TABLE stores ADD COLUMN IF NOT EXISTS abandoned_sent_count INT DEFAULT 0`);
-        await db.query(`ALTER TABLE stores ADD COLUMN IF NOT EXISTS abandoned_click_count INT DEFAULT 0`);
-
-        const result = await db.query('SELECT welcome_enabled, welcome_title, welcome_body, welcome_sent_count, welcome_click_count, abandoned_enabled, abandoned_title, abandoned_body, abandoned_config, abandoned_sent_count, abandoned_click_count FROM stores WHERE store_id = $1', [storeId]);
-        if (result.rows.length > 0) {
-            res.json({ success: true, automations: result.rows[0] });
-        } else {
-            res.json({ success: false });
-        }
-    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
-});
-
-app.post('/my-store/update-automations', async (req, res) => {
-    const { storeId, welcomeEnabled, welcomeTitle, welcomeBody, abandonedEnabled, abandonedTitle, abandonedBody, abandonedConfig } = req.body;
-    try {
-        const db = getPool();
-        await db.query(`
-            UPDATE stores SET 
-            welcome_enabled = $1, welcome_title = $2, welcome_body = $3,
-            abandoned_enabled = $4, abandoned_title = $5, abandoned_body = $6,
-            abandoned_config = $7
-            WHERE store_id = $8`,
-            [welcomeEnabled, welcomeTitle, welcomeBody, abandonedEnabled, abandonedTitle, abandonedBody,
-                abandonedConfig ? JSON.stringify(abandonedConfig) : null,
-                storeId]);
-        res.json({ success: true });
-    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
-});
-
-/* Trigger Welcome Notification (Called by Shopify App) */
-app.post('/api/trigger-welcome', async (req, res) => {
-    const { storeId, subscription } = req.body;
-    try {
-        const db = getPool();
-        const storeRes = await db.query('SELECT welcome_enabled, welcome_title, welcome_body, logo_url FROM stores WHERE store_id = $1', [storeId]);
-
-        if (storeRes.rows.length > 0) {
-            const settings = storeRes.rows[0];
-            if (settings.welcome_enabled) {
-                // Increment Sent Count
-                await db.query('UPDATE stores SET welcome_sent_count = welcome_sent_count + 1 WHERE store_id = $1', [storeId]);
-
-                const payload = JSON.stringify({
-                    title: settings.welcome_title || 'Welcome!',
-                    body: settings.welcome_body || 'Thanks for subscribing.',
-                    icon: settings.logo_url || 'https://cdn-icons-png.flaticon.com/512/733/733585.png',
-                    data: {
-                        url: '/',
-                        tracking: { type: 'welcome', storeId }
-                    }
-                });
-                const options = {
-                    vapidDetails: {
-                        subject: 'mailto:admin@zyrajewel.co.in',
-                        publicKey: process.env.PUBLIC_KEY,
-                        privateKey: process.env.PRIVATE_KEY,
-                    }
-                };
-
-                await webPush.sendNotification(subscription, payload, options);
-                console.log(`Welcome Notification sent to store ${storeId}`);
-            }
-        }
-        res.json({ success: true });
+        const data = await automations.getDashboard(getPool(), req.storeId);
+        if (!data) return res.status(404).json({ success: false, error: 'Store not found' });
+        res.json({ success: true, ...data });
     } catch (e) {
-        console.error("Welcome Trigger Failed", e);
+        console.error('Automations load error:', e.message);
+        res.status(500).json({ success: false, error: 'Could not load automations' });
+    }
+});
+
+app.post('/my-store/automations', async (req, res) => {
+    const { automation, config } = req.body || {};
+    try {
+        const result = await automations.saveAutomation(getPool(), req.storeId, automation, config);
+        if (!result.ok) return res.status(400).json({ success: false, errors: result.errors });
+        res.json({ success: true, config: result.value });
+    } catch (e) {
+        console.error('Automation save error:', e.message);
+        res.status(500).json({ success: false, errors: ['Could not save. Please try again.'] });
+    }
+});
+
+app.post('/my-store/automation-test', async (req, res) => {
+    const { automation, step, subscription, config } = req.body || {};
+    try {
+        const db = getPool();
+        const store = await automations.loadStore(db, req.storeId);
+        if (!store) return res.status(404).json({ success: false, error: 'Store not found' });
+        const result = await automations.sendTest({ db, webPush }, store, automation, step, subscription, config || null);
+        res.json({ success: !!result.ok, error: result.ok ? undefined : (result.error || 'Could not send the test') });
+    } catch (e) {
+        console.error('Automation test error:', e.message);
+        res.status(500).json({ success: false, error: 'Could not send the test' });
+    }
+});
+
+app.post('/my-store/run-automations', async (req, res) => {
+    try {
+        const summary = await automations.runAutomations({ db: getPool(), webPush, onlyStore: req.storeId, budget: 500 });
+        res.json({ success: true, summary });
+    } catch (e) {
+        console.error('Manual automation run error:', e.message);
+        res.status(500).json({ success: false, error: 'Could not run automations' });
+    }
+});
+
+/* Welcome notification (called by the Shopify app right after a new subscription) */
+app.post('/api/trigger-welcome', async (req, res) => {
+    const { storeId, subscription } = req.body || {};
+    try {
+        if (!subscription || !automations.isValidPushEndpoint(subscription.endpoint) || !subscription.keys) {
+            return res.status(400).json({ success: false, error: 'Invalid subscription' });
+        }
+        const db = getPool();
+        // Only real, stored subscribers of this store can receive its welcome push.
+        const subRes = await db.query('SELECT endpoint, keys, store_domain FROM subscriptions WHERE endpoint = $1 AND store_id = $2', [subscription.endpoint, storeId]);
+        if (!subRes.rows.length) return res.status(404).json({ success: false, error: 'Unknown subscription' });
+
+        const store = await automations.loadStore(db, storeId);
+        if (!store || !store.welcome_enabled) return res.json({ success: true, skipped: true });
+
+        const sub = subRes.rows[0];
+        const domain = /^[a-z0-9.-]+$/i.test(sub.store_domain || '') ? sub.store_domain : `${storeId}.myshopify.com`;
+        const result = await automations.sendAutomated({ db, webPush }, {
+            store,
+            automation: 'welcome',
+            step: 1,
+            sub: { endpoint: sub.endpoint, keys: sub.keys },
+            refId: null,
+            title: automations.renderTemplate(store.welcome_title || 'Welcome!', { store_name: store.store_name || storeId }),
+            body: automations.renderTemplate(store.welcome_body || 'Thanks for subscribing.', { store_name: store.store_name || storeId }),
+            image: null,
+            targetUrl: `https://${domain}/?utm_source=retner-push&utm_medium=push&utm_campaign=welcome`,
+            button: 'Visit store',
+            tag: 'retner-welcome',
+        });
+        if (result.ok) await db.query('UPDATE stores SET welcome_sent_count = COALESCE(welcome_sent_count, 0) + 1 WHERE store_id = $1', [storeId]);
+        res.json({ success: !!result.ok });
+    } catch (e) {
+        console.error('Welcome Trigger Failed', e.message);
+        res.status(500).json({ success: false, error: 'Server error' });
+    }
+});
+
+/* Legacy welcome click counter (old service workers) */
+app.post('/api/track-event', async (req, res) => {
+    const { type, storeId, event } = req.body || {};
+    try {
+        if (type === 'welcome' && event === 'click' && typeof storeId === 'string') {
+            await getPool().query('UPDATE stores SET welcome_click_count = COALESCE(welcome_click_count, 0) + 1 WHERE store_id = $1', [storeId]);
+        }
+        res.json({ success: true });
+    } catch (e) { res.status(500).json({ success: false }); }
+});
+
+/* Automation engine: called every 5 minutes by Vercel Cron (Authorization: Bearer CRON_SECRET) */
+async function cronHandler(req, res) {
+    if (!auth.isCronRequest(req)) return res.status(401).json({ success: false, error: 'unauthorized' });
+    try {
+        const summary = await automations.runAutomations({ db: getPool(), webPush });
+        res.json({ success: true, summary });
+    } catch (e) {
+        console.error('Cron Error', e);
         res.status(500).json({ success: false, error: e.message });
     }
-});
-
-/* Tracking API */
-app.post('/api/track-event', async (req, res) => {
-    const { type, storeId, event } = req.body;
-    try {
-        const db = getPool();
-        if (type === 'welcome' && event === 'click') {
-            await db.query('UPDATE stores SET welcome_click_count = welcome_click_count + 1 WHERE store_id = $1', [storeId]);
-        }
-        res.json({ success: true });
-    } catch (e) { res.status(500).json({ success: false, error: e.message }); }
-});
-
-/* CRON JOB for Scheduler & Abandoned Carts */
-app.get('/api/run-scheduler', async (req, res) => {
-    try {
-        await initCheckoutsTable();
-        const db = getPool();
-        let processed = 0;
-        let abandonedProcessed = 0;
-
-        // 1. SCHEDULED BROADCASTS
-        const pending = await db.query("SELECT * FROM campaigns WHERE status = 'scheduled' AND scheduled_at <= NOW()");
-
-        for (const camp of pending.rows) {
-            const subs = await SubscriptionModel.findByStore(camp.store_id);
-            let sent = 0;
-
-            const storeRes = await db.query('SELECT logo_url, store_email FROM stores WHERE store_id = $1', [camp.store_id]);
-            const s = storeRes.rows[0] || {};
-            const icon = s.logo_url || 'https://cdn-icons-png.flaticon.com/512/733/733585.png';
-            const subject = s.store_email ? 'mailto:' + s.store_email : 'mailto:Koregrowtech@gmail.com';
-
-            const options = { vapidDetails: { subject, publicKey: process.env.PUBLIC_KEY, privateKey: process.env.PRIVATE_KEY } };
-            if (camp.expiry_at) {
-                const ttl = Math.floor((new Date(camp.expiry_at).getTime() - Date.now()) / 1000);
-                if (ttl > 0) options.TTL = ttl;
-            }
-
-            const payload = JSON.stringify({
-                title: camp.title, body: camp.message, url: camp.url, image: camp.image, icon,
-                data: { type: camp.type, expiryAt: camp.expiry_at }
-            });
-
-            for (const sub of subs) {
-                try {
-                    await webPush.sendNotification({ endpoint: sub.endpoint, keys: sub.keys }, payload, options);
-                    sent++;
-                } catch (e) { console.error("Cron Push Error", e.message); }
-            }
-            await db.query("UPDATE campaigns SET status = 'sent', sent_count = $1 WHERE id = $2", [sent, camp.id]);
-            processed++;
-        }
-
-        // 2. ABANDONED CART REMINDERS (Multi-Step)
-        const activeStores = await db.query("SELECT store_id, abandoned_config, abandoned_enabled, logo_url, store_email FROM stores WHERE abandoned_enabled = TRUE");
-
-        for (const storeSettings of activeStores.rows) {
-            // Parse Config
-            let config = [];
-            try { config = JSON.parse(storeSettings.abandoned_config || '[]'); } catch (e) { }
-
-            if (!config.length) continue; // No config, skip
-
-            // Iterate Reminders (1, 2, 3)
-            for (let i = 0; i < config.length; i++) {
-                const step = config[i];
-                if (!step.enabled) continue;
-
-                // Calculate Cutoff
-                let delayMs = 20 * 60 * 1000; // Default
-                if (step.delay) {
-                    if (step.unit === 'minutes') delayMs = step.delay * 60 * 1000;
-                    if (step.unit === 'hours') delayMs = step.delay * 60 * 60 * 1000;
-                    if (step.unit === 'days') delayMs = step.delay * 24 * 60 * 60 * 1000;
-                }
-                const cutoff = new Date(Date.now() - delayMs);
-
-                // Query Due Checkouts
-                const sentCol = 'reminder_' + (i + 1) + '_sent';
-                // Logic: Updated < Cutoff AND Not Sent Yet AND (First Step OR Previous Sent)
-                let query = `SELECT * FROM abandoned_checkouts WHERE store_id = $1 AND updated_at <= $2 AND ${sentCol} = FALSE LIMIT 50`;
-
-                const dueCheckouts = await db.query(query, [storeSettings.store_id, cutoff]);
-
-                if (dueCheckouts.rows.length > 0) {
-                    // Prepare Notification
-                    const icon = storeSettings.logo_url || 'https://cdn-icons-png.flaticon.com/512/733/733585.png';
-                    const subject = storeSettings.store_email ? 'mailto:' + storeSettings.store_email : 'mailto:Koregrowtech@gmail.com';
-                    const payloadBase = {
-                        title: step.title,
-                        body: step.body,
-                        image: step.image,
-                        icon: icon,
-                        actions: [{ action: 'checkout', title: step.btn1 || 'Checkout' }]
-                    };
-
-                    for (const checkout of dueCheckouts.rows) {
-                        // Find Subscriber
-                        // Trying to match via cart_token (token column in checkouts vs subscription data)
-                        // Assuming subscription has 'cart_token' field or we search broadly?
-                        // For now, we search assuming we have a link. 
-                        // Note: We need to implement cart_token saving in /subscribe.
-
-                        // Hack: If we can't find token, we can't send.
-                        // But we'll try to match by 'keys' if feasible? No.
-                        // We will query SubscriptionModel using a custom find method if available, or just iterate (slow).
-                        // Optimization: Store cart_token in subscriptions table.
-
-                        // Temporary: Sending only if we find a match.
-                        // We assume SubscriptionModel has a `findByData` or we iterate store subs.
-                        const storeSubs = await SubscriptionModel.findByStore(storeSettings.store_id);
-                        const matchSub = storeSubs.find(s => s.cart_token === checkout.token || (s.data && s.data.cart_token === checkout.token));
-
-                        if (matchSub) {
-                            const dynamicPayload = JSON.stringify({
-                                ...payloadBase,
-                                data: { url: checkout.cart_url || '/' }
-                            });
-                            try {
-                                await webPush.sendNotification({ endpoint: matchSub.endpoint, keys: matchSub.keys }, dynamicPayload, { vapidDetails: { subject, publicKey: process.env.PUBLIC_KEY, privateKey: process.env.PRIVATE_KEY } });
-                                // Mark Sent
-                                await db.query(`UPDATE abandoned_checkouts SET ${sentCol} = TRUE WHERE id = $1`, [checkout.id]);
-                                abandonedProcessed++;
-                            } catch (e) { console.error('Aband push fail', e.message); }
-                        }
-                    }
-                }
-            }
-        }
-
-        // Debug Info
-        const allScheduled = await db.query("SELECT count(*) FROM campaigns WHERE status = 'scheduled'");
-        const serverTime = new Date().toISOString();
-
-        res.json({ success: true, processed, abandonedProcessed, debug: { serverTime, pendingMatch: pending.rows.length, totalScheduled: allScheduled.rows[0].count } });
-
-    } catch (e) {
-        console.error("Cron Error", e);
-        res.status(500).json({ error: e.message });
-    }
-});
+}
+app.get('/api/cron/automations', cronHandler);
+app.get('/api/run-scheduler', cronHandler);
 
 /* =========================================
    SUPER ADMIN PANEL (Hidden Route)
    ========================================= */
-const SUPER_PASS = 'piyush_admin_2025';
 
 app.get('/master-admin', (req, res) => {
     res.send(`
@@ -3020,43 +2092,36 @@ app.get('/master-admin', (req, res) => {
     `);
 });
 
+// Super admin: password comes from SUPER_ADMIN_PASSWORD (disabled when unset),
+// tokens are signed and expire after 12 hours.
 app.post('/api/super/login', (req, res) => {
-    if (req.body.pass === SUPER_PASS) res.json({ success: true, token: 'super_secret_token_x99' });
+    if (auth.superPasswordOk(req.body && req.body.pass)) res.json({ success: true, token: auth.issueSuperToken() });
     else res.json({ success: false });
 });
 
-app.get('/api/super/stores', async (req, res) => {
-    if (req.query.token !== 'super_secret_token_x99') return res.status(403).json({});
+app.get('/api/super/stores', auth.requireSuper, async (req, res) => {
     const db = getPool();
-    // Ensure column exists
     try { await db.query('ALTER TABLE stores ADD COLUMN IF NOT EXISTS monthly_limit INTEGER DEFAULT 1000'); } catch (e) { }
-
-    // Fetch
-    const result = await db.query('SELECT * FROM stores ORDER BY created_at DESC');
+    // Never return password hashes.
+    const result = await db.query(`SELECT id, store_id, store_name, created_at, logo_url, store_email, monthly_limit, welcome_enabled, abandoned_enabled, direct_prompt_enabled FROM stores ORDER BY created_at DESC`);
     res.json({ stores: result.rows });
 });
 
-app.post('/api/super/update-limit', async (req, res) => {
-    if (req.body.token !== 'super_secret_token_x99') return res.status(403).json({});
+app.post('/api/super/update-limit', auth.requireSuper, async (req, res) => {
     const db = getPool();
-    await db.query('UPDATE stores SET monthly_limit = $1 WHERE store_id = $2', [req.body.limit, req.body.store_id]);
+    await db.query('UPDATE stores SET monthly_limit = $1 WHERE store_id = $2', [parseInt(req.body.limit, 10) || 0, req.body.store_id]);
     res.json({ success: true });
 });
 
-app.post('/api/super/delete-store', async (req, res) => {
-    if (req.body.token !== 'super_secret_token_x99') return res.status(403).json({});
+app.post('/api/super/delete-store', auth.requireSuper, async (req, res) => {
     const db = getPool();
     const storeId = req.body.store_id;
 
     try {
         console.log(`Deleting Store & Data for: ${storeId}`);
-        // 1. Delete Campaigns
         await db.query('DELETE FROM campaigns WHERE store_id = $1', [storeId]);
-        // 2. Delete Subscriptions (Users)
         await db.query('DELETE FROM subscriptions WHERE store_id = $1', [storeId]);
-        // 3. Delete Store Account
         await db.query('DELETE FROM stores WHERE store_id = $1', [storeId]);
-
         res.json({ success: true });
     } catch (e) {
         console.error("Delete Store Error:", e);
@@ -3064,19 +2129,13 @@ app.post('/api/super/delete-store', async (req, res) => {
     }
 });
 
-app.get('/api/debug-data', async (req, res) => {
+app.get('/api/debug-data', auth.requireSuper, async (req, res) => {
     try {
         const db = getPool();
-        const checkouts = await db.query('SELECT * FROM abandoned_checkouts ORDER BY updated_at DESC LIMIT 5');
-        const subs = await db.query('SELECT endpoint, store_id, cart_token, customer_id, created_at FROM subscriptions ORDER BY created_at DESC LIMIT 5');
-        const stores = await db.query('SELECT store_id, abandoned_enabled, abandoned_config FROM stores');
-        res.json({
-            checkouts: checkouts.rows,
-            subscriptions: subs.rows,
-            stores: stores.rows,
-            serverTime: new Date().toISOString()
-        });
-    } catch (e) { res.send(e.message); }
+        const state = await db.query(`SELECT key, value, updated_at FROM push_system_state ORDER BY updated_at DESC LIMIT 20`);
+        const carts = await db.query(`SELECT store_id, status, COUNT(*)::int AS n FROM push_carts GROUP BY store_id, status ORDER BY store_id`);
+        res.json({ state: state.rows, carts: carts.rows, serverTime: new Date().toISOString() });
+    } catch (e) { res.status(500).json({ error: e.message }); }
 });
 
 // Privacy Policy Page
@@ -3097,7 +2156,7 @@ app.get('/privacy', (req, res) => {
         </head>
         <body>
             <h1>Privacy Policy</h1>
-            <p class="update-date">Last updated: December 31, 2025</p>
+            <p class="update-date">Last updated: November 19, 2026</p>
 
             <p>Retner Smart Push ("we", "us", or "our") provides a web push notification service for Shopify merchants. This Privacy Policy describes how we collect, use, and handle your personal information when you use our app.</p>
 
@@ -3108,6 +2167,7 @@ app.get('/privacy', (req, res) => {
                 <li>Anonymous Push Subscription Tokens</li>
                 <li>Device type (Desktop/Mobile)</li>
                 <li>Browser language settings</li>
+                <li>Shopping activity on the merchant's store linked only to the anonymous push subscription: products viewed, cart contents and last visit time</li>
             </ul>
 
             <h2>2. How We Use Your Information</h2>
@@ -3115,6 +2175,7 @@ app.get('/privacy', (req, res) => {
             <ul>
                 <li>Send web push notifications explicitly requested by the user.</li>
                 <li>Provide analytics to the merchant (e.g., number of subscribers).</li>
+                <li>Send the merchant's automated reminders that the subscriber opted into notifications for (e.g., items left in the cart, a product they viewed, new arrivals after a long absence). Shopping activity is used only for these reminders on that same store and is never sold or shared.</li>
                 <li>Authenticate the merchant via Shopify's secure API.</li>
             </ul>
 

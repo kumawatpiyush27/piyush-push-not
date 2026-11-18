@@ -1,4 +1,16 @@
 {
+    "functions": {
+        "api/index.js": {
+            "maxDuration": 300,
+            "includeFiles": "backend/{public,sql}/**"
+        }
+    },
+    "crons": [
+        {
+            "path": "/api/cron/automations",
+            "schedule": "*/5 * * * *"
+        }
+    ],
     "rewrites": [
         {
             "source": "/test",
