@@ -426,6 +426,8 @@ app.get('/store-admin', async (req, res) => {
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Retner Dashboard</title>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
     <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
     <style>
         :root {
@@ -556,8 +558,11 @@ app.get('/store-admin', async (req, res) => {
         .btn-sm { font-size: 12px; padding: 4px 8px; }
 
     </style>
-    <link rel="stylesheet" href="/css/automations.css?v=2">
-    <script src="/js/automations.js?v=2" defer></script>
+    <link rel="stylesheet" href="/css/automations.css?v=3">
+    <link rel="stylesheet" href="/css/dashboard.css?v=1">
+    <script src="/js/automations.js?v=3" defer></script>
+    <script src="/js/media.js?v=1" defer></script>
+    <script src="/js/analytics.js?v=1" defer></script>
 </head>
 <body>
 
@@ -600,6 +605,9 @@ app.get('/store-admin', async (req, res) => {
             <div class="menu-item" onclick="switchView('history')" id="menu-hist">
                 <i class="fas fa-history"></i> History
             </div>
+            <div class="menu-item" onclick="switchView('analytics')" id="menu-analytics">
+                <i class="fas fa-chart-line"></i> Analytics
+            </div>
             <div class="menu-item" onclick="switchView('subscribers')" id="menu-subs">
                 <i class="fas fa-users"></i> Subscribers
             </div>
@@ -621,6 +629,7 @@ app.get('/store-admin', async (req, res) => {
         <div class="main-content">
             <!-- TOP BAR -->
             <div class="top-bar">
+                <button class="rd-menu-btn" type="button" aria-label="Open menu" onclick="document.body.classList.toggle('rd-nav-open')"><i class="fas fa-bars"></i></button>
                 <h2 id="pageTitle" style="font-size: 18px; margin: 0;">Dashboard</h2>
                 <div style="display: flex; align-items: center; gap: 10px;">
                     <div style="width: 32px; height: 32px; background: #e1e3e5; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-weight: bold; color: var(--primary);" id="userInitials">S</div>
@@ -635,12 +644,12 @@ app.get('/store-admin', async (req, res) => {
                 <div class="stats-grid-4">
                     <div class="stat-card-premium">
                         <div class="stat-header">
-                            <span class="stat-title">Campaigns Sent</span>
+                            <span class="stat-title">Notifications Sent</span>
                             <div class="stat-icon" style="background:#eaf4ff; color:#2c6ecb;"><i class="fas fa-paper-plane"></i></div>
                         </div>
                         <div>
-                            <div class="stat-value" id="stat-total-sent">0</div>
-                            <div class="stat-trend">Last 30 days</div>
+                            <div class="stat-value rd-skel" id="stat-total-sent">0</div>
+                            <div class="stat-trend" id="trend-sent">Last 30 days</div>
                         </div>
                     </div>
 
@@ -650,8 +659,8 @@ app.get('/store-admin', async (req, res) => {
                             <div class="stat-icon"><i class="fas fa-users"></i></div>
                         </div>
                         <div>
-                            <div class="stat-value" id="stat-total-sub">0</div>
-                            <div class="stat-trend">+12% vs last month</div>
+                            <div class="stat-value rd-skel" id="stat-total-sub">0</div>
+                            <div class="stat-trend" id="trend-sub">&nbsp;</div>
                         </div>
                     </div>
 
@@ -661,19 +670,19 @@ app.get('/store-admin', async (req, res) => {
                             <div class="stat-icon" style="background:#fff4e5; color:#d97008;"><i class="fas fa-mouse-pointer"></i></div>
                         </div>
                         <div>
-                            <div class="stat-value" id="stat-clicks">0 (0.00%)</div>
-                            <div class="stat-trend">Real-time Data</div>
+                            <div class="stat-value rd-skel" id="stat-clicks">0</div>
+                            <div class="stat-trend" id="trend-clicks">Last 30 days</div>
                         </div>
                     </div>
 
                      <div class="stat-card-premium">
                         <div class="stat-header">
-                            <span class="stat-title">Impressions Consumed</span>
-                            <div class="stat-icon" style="background:#f4f1ff; color:#9563ff;"><i class="fas fa-eye"></i></div>
+                            <span class="stat-title">Revenue From Notifications</span>
+                            <div class="stat-icon" style="background:#ecfdf5; color:#047857;"><i class="fas fa-indian-rupee-sign"></i></div>
                         </div>
                         <div>
-                            <div class="stat-value" id="stat-impressions">0 / 500</div>
-                            <div class="stat-trend" style="background:#eee; color:#666;">Limit Rests in 12d</div>
+                            <div class="stat-value rd-skel" id="stat-revenue">₹0</div>
+                            <div class="stat-trend" id="trend-revenue">Last 30 days</div>
                         </div>
                     </div>
                 </div>
@@ -682,8 +691,8 @@ app.get('/store-admin', async (req, res) => {
                 <div class="charts-grid-2">
                     <div class="chart-card">
                         <div class="chart-header">
-                            <h3>Subscribers Overview</h3>
-                            <button class="btn-secondary" style="padding: 4px 12px; font-size: 12px;">Last 30 Days</button>
+                            <h3>New Subscribers</h3>
+                            <span class="rd-chip">Last 30 days</span>
                         </div>
                         <div style="height: 250px;">
                             <canvas id="subChart"></canvas>
@@ -691,8 +700,8 @@ app.get('/store-admin', async (req, res) => {
                     </div>
                     <div class="chart-card">
                         <div class="chart-header">
-                            <h3>Clicks Overview</h3>
-                            <button class="btn-secondary" style="padding: 4px 12px; font-size: 12px;">Last 30 Days</button>
+                            <h3>Notifications &amp; Clicks</h3>
+                            <span class="rd-chip">Last 30 days</span>
                         </div>
                          <div style="height: 250px;">
                             <canvas id="revChart"></canvas>
@@ -779,14 +788,15 @@ app.get('/store-admin', async (req, res) => {
                             <div class="wizard-card">
                                 <h3>Media & Actions</h3>
                                 <div class="form-group">
-                                    <label>Hero Image URL</label>
-                                    <input type="text" id="campImg" placeholder="https://..." oninput="updatePreview()">
+                                    <label>Hero image <span class="rd-opt">(optional)</span></label>
+                                    <input type="hidden" id="campImg" oninput="updatePreview()">
+                                    <div data-media-for="campImg" data-purpose="hero" data-max-side="1440" data-hint="best at 1350 × 675 px (2:1)"></div>
                                 </div>
 
                                 <div class="form-group">
-                                    <label>Notification Icon (Logo)</label>
-                                    <input type="text" id="campIcon" placeholder="https://..." oninput="updatePreview()">
-                                    <p class="stat-label">Rec: 100x100px (1:1 Ratio)</p>
+                                    <label>Notification icon <span class="rd-opt">(optional — your store logo is used if empty)</span></label>
+                                    <input type="hidden" id="campIcon" oninput="updatePreview()">
+                                    <div data-media-for="campIcon" data-purpose="icon" data-max-side="256" data-hint="square, at least 192 × 192 px"></div>
                                 </div>
                                 
                                 <h4 style="margin: 16px 0 12px 0;">Action Buttons (Optional)</h4>
@@ -1005,8 +1015,9 @@ app.get('/store-admin', async (req, res) => {
                         <input type="text" id="setStoreName" placeholder="My Store">
                     </div>
                     <div class="form-group">
-                        <label>Default Logo URL</label>
-                        <input type="text" id="setLogoUrl" placeholder="https://example.com/logo.png">
+                        <label>Store logo</label>
+                        <input type="hidden" id="setLogoUrl">
+                        <div data-media-for="setLogoUrl" data-purpose="logo" data-max-side="512" data-hint="square works best"></div>
                         <p style="font-size: 12px; color: #666; margin-top: 4px;">This logo will be used as the default notification icon.</p>
                     </div>
                     <div class="form-group">
@@ -1039,6 +1050,11 @@ app.get('/store-admin', async (req, res) => {
                     <button class="btn-action" onclick="savePassword()">Set Password</button>
                     <div id="pwMsg" style="margin-top: 10px; font-size: 13px; display: none;"></div>
                 </div>
+            </div>
+
+            <!-- ANALYTICS VIEW (rendered by /js/analytics.js) -->
+            <div id="view-analytics" class="content-area hidden">
+                <div id="analytics-root"></div>
             </div>
 
             <!-- AUTOMATIONS VIEW (rendered by /js/automations.js) -->
@@ -1122,7 +1138,8 @@ app.get('/store-admin', async (req, res) => {
 
             loadStats();
             // Deep link from the Shopify app, e.g. ?view=automations
-            if (initialView && ['automations', 'campaign', 'history', 'subscribers', 'settings'].indexOf(initialView) !== -1) {
+            if (window.RetnerMedia) window.RetnerMedia.attachAll(document);
+            if (initialView && ['automations', 'analytics', 'campaign', 'history', 'subscribers', 'settings'].indexOf(initialView) !== -1) {
                 switchView(initialView);
             }
         }
@@ -1149,6 +1166,12 @@ app.get('/store-admin', async (req, res) => {
                 document.getElementById('menu-auto').classList.add('active');
                 loadAutomations();
             }
+            if (window.RetnerAnalytics && viewName !== 'analytics') window.RetnerAnalytics.stop();
+            if(viewName === 'analytics') {
+                document.getElementById('menu-analytics').classList.add('active');
+                if (window.RetnerAnalytics) window.RetnerAnalytics.mount(document.getElementById('analytics-root'), { api: apiFetch, store: store });
+            }
+            document.body.classList.remove('rd-nav-open');
 
             // Hide all content areas
             document.querySelectorAll('.content-area').forEach(v => v.classList.add('hidden'));
@@ -1162,6 +1185,7 @@ app.get('/store-admin', async (req, res) => {
                 subscribers: 'Subscribers List', 
                 settings: 'Settings', 
                 automations: 'Automations',
+                analytics: 'Analytics',
                 'automation-editor': 'Automation Editor'
             };
             document.getElementById('pageTitle').innerText = titles[viewName] || 'SmartPush';
@@ -1231,76 +1255,110 @@ app.get('/store-admin', async (req, res) => {
             }
         }
 
+        // ---- Toasts (replace blocking alert() popups) ----
+        function toast(message, type) {
+            let box = document.getElementById('rd-toasts');
+            if (!box) { box = document.createElement('div'); box.id = 'rd-toasts'; box.setAttribute('aria-live', 'polite'); document.body.appendChild(box); }
+            const el = document.createElement('div');
+            el.className = 'rd-toast rd-toast-' + (type || 'info');
+            el.setAttribute('role', type === 'error' ? 'alert' : 'status');
+            el.textContent = message;
+            const close = document.createElement('button');
+            close.type = 'button'; close.setAttribute('aria-label', 'Dismiss'); close.innerHTML = '&times;';
+            close.onclick = () => el.remove();
+            el.appendChild(close);
+            box.appendChild(el);
+            setTimeout(() => el.remove(), type === 'error' ? 10000 : 5000);
+        }
+        window.alert = function (message) {
+            const text = String(message == null ? '' : message);
+            toast(text, /❌|⚠️|error|fail|invalid|could not|please/i.test(text) ? 'error' : (/✅|📅|saved|sent|success|done/i.test(text) ? 'success' : 'info'));
+        };
+        // Deferred scripts (uploader, automations, analytics) load after this
+        // inline script: wire them up once they are available.
+        document.addEventListener('DOMContentLoaded', function () {
+            if (!store) return;
+            if (window.RetnerMedia) window.RetnerMedia.attachAll(document);
+            if (initialView === 'automations' || initialView === 'analytics') switchView(initialView);
+        });
+        // Mobile: tap outside the open menu to close it.
+        document.addEventListener('click', function (e) {
+            if (!document.body.classList.contains('rd-nav-open')) return;
+            if (e.target.closest('.sidebar') || e.target.closest('.rd-menu-btn')) return;
+            document.body.classList.remove('rd-nav-open');
+        });
+
+        // ---- Home: real numbers only ----
+        let homeCharts = [];
+        function escHtml(v) { return String(v == null ? '' : v).replace(/[&<>"']/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+        function fmtNum(n) { return Number(n || 0).toLocaleString('en-IN'); }
+        function fmtMoney(n) {
+            try { return new Intl.NumberFormat('en-IN', { style: 'currency', currency: 'INR', maximumFractionDigits: 0 }).format(Number(n) || 0); }
+            catch (e) { return '₹' + Math.round(Number(n) || 0); }
+        }
+        function setTrend(id, t, fallback) {
+            const el = document.getElementById(id);
+            if (!el) return;
+            el.classList.remove('rd-up', 'rd-down');
+            if (!t || t.change === null || t.change === undefined || (!t.value && !t.previous)) { el.textContent = fallback; return; }
+            if (!t.change) { el.textContent = 'Same as previous 30 days'; return; }
+            el.classList.add(t.change > 0 ? 'rd-up' : 'rd-down');
+            el.textContent = (t.change > 0 ? '▲ ' : '▼ ') + Math.abs(t.change) + '% vs previous 30 days';
+        }
+
         async function loadStats() {
-            const res = await fetch('/my-store/stats?storeId=' + store.id);
-            const data = await res.json();
-            
-            // POPULATE CARDS with REALISTIC DATA
-            const subCount = data.subscribers || 0;
-            const campCount = data.campaigns || 0;
-            const impressions = data.totalImpressions || 0;
-            const revenue = data.totalRevenue || 0;
-            const clicks = data.totalClicks || 0;
-            const ctr = impressions > 0 ? ((clicks / impressions) * 100).toFixed(2) : '0.00';
+            const tz = (Intl.DateTimeFormat().resolvedOptions().timeZone) || 'UTC';
+            const [statsRes, anaRes] = await Promise.all([
+                apiFetch('/my-store/stats'),
+                apiFetch('/my-store/analytics?days=30&tz=' + encodeURIComponent(tz)),
+            ]);
+            document.querySelectorAll('.rd-skel').forEach((el) => el.classList.remove('rd-skel'));
+            const a = anaRes.ok && anaRes.data.success ? anaRes.data : null;
+            const data = statsRes.ok ? statsRes.data : {};
 
-            document.getElementById('stat-total-sub').innerText = subCount;
-            document.getElementById('stat-total-sent').innerText = campCount;
-            if(document.getElementById('stat-clicks')) {
-                 document.getElementById('stat-clicks').innerText = clicks + " (" + ctr + "%)";
-            }
-            if(document.getElementById('stat-revenue')) {
-                 document.getElementById('stat-revenue').innerText = '₹' + revenue.toFixed(2);
-            }
-            document.getElementById('stat-impressions').innerText = impressions + ' / 5000'; // Higher limit for demo
-
-            // Render Sub Chart
-            const ctx = document.getElementById('subChart').getContext('2d');
-            new Chart(ctx, {
-                type: 'line',
-                data: {
-                    labels: ['Week 1', 'Week 2', 'Week 3', 'Week 4'],
-                    datasets: [{
-                        label: 'New Subscribers',
-                        data: [0, Math.floor(subCount * 0.2), Math.floor(subCount * 0.5), subCount],
-                        borderColor: '#2563EB',
-                        tension: 0.4,
-                        fill: true,
-                        backgroundColor: 'rgba(37, 99, 235, 0.1)'
-                    }]
-                },
-                options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { grid: { display: false } }, y: { display: false } } }
-            });
-
-            // Render Rev Chart (Mocked relative to revenue)
-            const ctx2 = document.getElementById('revChart').getContext('2d');
-            new Chart(ctx2, {
-                type: 'bar',
-                data: {
-                    labels: ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun'],
-                    datasets: [{
-                        label: 'Clicks',
-                        data: [Math.floor(clicks * 0.1), Math.floor(clicks * 0.15), Math.floor(clicks * 0.2), Math.floor(clicks * 0.25), Math.floor(clicks * 0.1), Math.floor(clicks * 0.15), Math.floor(clicks * 0.05)], 
-                        backgroundColor: '#3B82F6',
-                        borderRadius: 4
-                    }]
-                },
-                options: { responsive: true, maintainAspectRatio: false, plugins: { legend: { display: false } }, scales: { x: { grid: { display: false } }, y: { display: false } } }
-            });
-
-            // POPULATE RECENT CAMPAIGNS
-            const tbodyRecent = document.getElementById('recentCampaignsBody');
-            tbodyRecent.innerHTML = '';
-            if(data.recentCampaigns && data.recentCampaigns.length > 0) {
-                data.recentCampaigns.forEach(camp => {
-                    const date = new Date(camp.created_at).toLocaleDateString();
-                    tbodyRecent.innerHTML += '<tr style="border-bottom: 1px solid #f9f9f9;">' +
-                        '<td style="padding: 12px 10px; font-size: 13px; color: #555;">' + date + '</td>' +
-                        '<td style="padding: 12px 10px; font-weight: 500; font-size: 14px;">' + camp.title + '</td>' +
-                        '<td style="padding: 12px 10px;"><span style="background: #DBEAFE; color: #1E40AF; padding: 2px 8px; border-radius: 10px; font-size: 11px; font-weight: 600;">' + camp.sent_count + ' Sent</span></td>' +
-                    '</tr>';
-                });
+            if (a) {
+                const t = a.totals;
+                document.getElementById('stat-total-sub').innerText = fmtNum(a.subscribers.active);
+                setTrend('trend-sub', null, t.subscribers.value ? '+' + fmtNum(t.subscribers.value) + ' new in the last 30 days' : 'No new subscribers in 30 days');
+                document.getElementById('stat-total-sent').innerText = fmtNum(t.sent.value);
+                setTrend('trend-sent', t.sent, t.sent.value ? 'Last 30 days' : 'None in the last 30 days');
+                document.getElementById('stat-clicks').innerText = fmtNum(t.clicks.value) + ' (' + t.ctr.value + '%)';
+                setTrend('trend-clicks', t.clicks, 'Last 30 days');
+                document.getElementById('stat-revenue').innerText = fmtMoney(t.revenue.value);
+                setTrend('trend-revenue', t.revenue, fmtNum(t.orders.value) + ' orders · last 30 days');
             } else {
-                tbodyRecent.innerHTML = '<tr><td colspan="3" style="padding: 20px; text-align: center; color: #999;">No recent campaigns found.</td></tr>';
+                ['stat-total-sub', 'stat-total-sent', 'stat-clicks', 'stat-revenue'].forEach((id) => { document.getElementById(id).innerText = '—'; });
+                document.getElementById('trend-sub').innerText = 'Could not load. Refresh to try again.';
+            }
+
+            homeCharts.forEach((c) => { try { c.destroy(); } catch (e) {} });
+            homeCharts = [];
+            if (a && typeof Chart !== 'undefined') {
+                const labels = a.series.map((r) => new Date(r.day + 'T00:00:00').toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }));
+                const opts = { responsive: true, maintainAspectRatio: false, interaction: { mode: 'index', intersect: false },
+                    plugins: { legend: { display: false } },
+                    scales: { x: { grid: { display: false }, ticks: { maxTicksLimit: 6 } }, y: { beginAtZero: true, ticks: { precision: 0 }, grid: { color: '#f1f1f1' } } } };
+                homeCharts.push(new Chart(document.getElementById('subChart'), { type: 'line', options: opts, data: { labels, datasets: [
+                    { label: 'New subscribers', data: a.series.map((r) => r.subscribers), borderColor: '#2563EB', backgroundColor: 'rgba(37, 99, 235, 0.08)', fill: true, tension: 0.35, pointRadius: 0 } ] } }));
+                homeCharts.push(new Chart(document.getElementById('revChart'), { type: 'bar', options: { ...opts, plugins: { legend: { display: true, position: 'bottom', labels: { boxWidth: 10, usePointStyle: true } } } }, data: { labels, datasets: [
+                    { type: 'bar', label: 'Sent', data: a.series.map((r) => r.sent), backgroundColor: '#bfdbfe', borderRadius: 4 },
+                    { type: 'line', label: 'Clicks', data: a.series.map((r) => r.clicks), borderColor: '#7c3aed', backgroundColor: '#7c3aed', tension: 0.35, pointRadius: 0 } ] } }));
+            }
+
+            // Recent campaigns
+            const tbodyRecent = document.getElementById('recentCampaignsBody');
+            const recent = (data && data.recentCampaigns) || [];
+            if (recent.length) {
+                tbodyRecent.innerHTML = recent.map((camp) => {
+                    const date = camp.created_at ? new Date(camp.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
+                    const badge = camp.status === 'scheduled' ? '<span class="rd-badge rd-badge-amber">Scheduled</span>'
+                        : '<span class="rd-badge rd-badge-blue">' + fmtNum(camp.sent_count) + ' sent</span>';
+                    return '<tr><td>' + escHtml(date) + '</td><td class="rd-strong">' + escHtml(camp.title) + '</td><td>' + badge + '</td></tr>';
+                }).join('');
+            } else {
+                tbodyRecent.innerHTML = '<tr><td colspan="3"><div class="rd-empty"><i class="fas fa-bullhorn"></i><div><b>No campaigns yet</b></div>' +
+                    '<div>Send your first notification to all subscribers in a few clicks.</div>' +
+                    '<button class="new-campaign-btn rd-inline-btn" onclick="switchView(&quot;campaign&quot;)"><i class="fas fa-plus"></i> Create campaign</button></div></td></tr>';
             }
         }
 
@@ -1647,6 +1705,8 @@ app.get('/store-admin', async (req, res) => {
              if(data.success) {
                  document.getElementById('setStoreName').value = data.store.store_name;
                  document.getElementById('setLogoUrl').value = data.store.logo_url || '';
+                 const logoInput = document.getElementById('setLogoUrl');
+                 if (logoInput.__rm) logoInput.__rm.setValue(logoInput.value);
                  document.getElementById('setStoreEmail').value = data.store.store_email || '';
                  document.getElementById('setDirectPrompt').checked = data.store.direct_prompt_enabled || false;
              }

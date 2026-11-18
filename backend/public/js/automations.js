@@ -82,9 +82,6 @@
   };
 
   var SOON = [
-    { name: 'Price drop', icon: 'fa-tag', desc: 'Alert shoppers when a product they viewed gets cheaper.', badge: 'Next update' },
-    { name: 'Back in stock', icon: 'fa-box-open', desc: 'Tell shoppers the moment a sold-out product they wanted is back.', badge: 'Next update' },
-    { name: 'Order thank-you', icon: 'fa-bag-shopping', desc: 'Thank buyers after checkout and stop cart reminders instantly.', badge: 'Next update' },
     { name: 'Shipping updates', icon: 'fa-truck-fast', desc: 'Shipped, out for delivery and delivered notifications.', badge: 'Needs Shopify approval' },
   ];
 
@@ -382,7 +379,8 @@
       html += fieldHtml('Button text', 'ra-f-button', c.button, { field: 'button', max: LIMITS.button });
     }
     if (key === 'abandoned_cart' || key === 'browse_abandonment') {
-      html += fieldHtml('Image (optional)', 'ra-f-image', c.image, { field: 'image', placeholder: 'https://…', hint: 'Leave empty to show the product photo automatically.' });
+      html += '<div class="ra-field"><label>Image (optional)</label><div data-ra-media></div>' +
+        '<div class="ra-hint">Leave empty to show the shopper\'s own product photo automatically.</div></div>';
     }
     if (key === 'price_drop' || key === 'back_in_stock') {
       html += '<div class="ra-hint" style="margin:-6px 0 14px">The product photo is added automatically.</div>';
@@ -446,6 +444,17 @@
 
     var f = S.el.querySelector('[data-field="' + e.focus + '"]');
     if (f && document.activeElement !== f && e.focusRestore) { f.focus(); e.focusRestore = false; }
+
+    var mediaEl = S.el.querySelector('[data-ra-media]');
+    if (mediaEl && window.RetnerMedia) {
+      window.RetnerMedia.create(mediaEl, {
+        value: stepConfig().image || '',
+        purpose: 'automation',
+        maxSide: 1440,
+        hint: 'best at 1350 × 675 px',
+        onChange: function (url) { stepConfig().image = url; refreshPreviewOnly(); },
+      });
+    }
   }
 
   function refreshPreviewOnly() {
