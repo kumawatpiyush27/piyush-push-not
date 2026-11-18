@@ -675,6 +675,14 @@ async function sendCampaign(ctx, store, camp, { btn1Text, btn1Url, btn2Text, btn
 
 async function runScheduledCampaigns(ctx, summary, onlyStore) {
     const params = onlyStore ? [onlyStore] : [];
+    // Never blast a campaign that is more than 24h overdue (e.g. after an
+    // outage): mark it 'missed' so the merchant can resend it on purpose.
+    const missed = await ctx.db.query(
+        `UPDATE campaigns SET status = 'missed'
+         WHERE status = 'scheduled' AND scheduled_at < NOW() - INTERVAL '24 hours' ${onlyStore ? 'AND store_id = $1' : ''}`,
+        params
+    );
+    summary.missedCampaigns = missed.rowCount;
     const { rows } = await ctx.db.query(
         `UPDATE campaigns SET status = 'sending'
          WHERE id IN (
