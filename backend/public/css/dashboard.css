@@ -243,3 +243,17 @@ button:focus-visible, .menu-item:focus-visible, [role=button]:focus-visible { ou
   .ra2-arrow { display: none; }
   .ra2-feed time { display: none; }
 }
+
+/* ---------------- Monthly limit / usage ---------------- */
+.rd-usage { margin: 16px 0; }
+.rd-usage h3 { margin: 0; }
+.rd-usage-head { display: flex; justify-content: space-between; align-items: flex-end; gap: 12px; flex-wrap: wrap; }
+.rd-usage-sub { font-size: 13px; color: var(--text-sub); margin-top: 2px; }
+.rd-usage-num { font-size: 15px; color: var(--text-sub); }
+.rd-usage-num b { font-size: 22px; color: var(--text-dark); }
+.rd-usage-bar { height: 10px; background: #eef0f3; border-radius: 999px; overflow: hidden; margin: 12px 0 8px; }
+.rd-usage-bar span { display: block; height: 100%; background: var(--primary); border-radius: 999px; transition: width .4s ease; }
+.rd-usage-foot { font-size: 12.5px; color: var(--text-sub); }
+.rd-usage[data-level="warn"] .rd-usage-bar span { background: #f59e0b; }
+.rd-usage[data-level="over"] .rd-usage-bar span { background: #dc2626; }
+.rd-usage[data-level="over"] .rd-usage-foot { color: var(--err); font-weight: 600; }
