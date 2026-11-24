@@ -26,6 +26,8 @@ app.use(express.json({
 }));
 app.use(express.urlencoded({ extended: true }));
 app.use(express.static(path.join(__dirname, 'public')));
+// Browsers ask for /favicon.ico on every dashboard page; use the Retner logo.
+app.get('/favicon.ico', (req, res) => res.redirect(301, '/logo.png'));
 
 // Database Pool
 // Database Pool (Lazy Init)
