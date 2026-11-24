@@ -652,6 +652,8 @@
 
   // ------------------------------------------------------------- public
   window.RetnerAutomations = {
+    // Subscribes this browser (for "send test to me" in the campaign creator too).
+    testSubscription: testSubscription,
     mount: function (el, opts) {
       if (!el) return;
       if (S.el !== el) {

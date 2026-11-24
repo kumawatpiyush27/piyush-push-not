@@ -1,0 +1,301 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Retner SmartPush</title>
+  <link rel="icon" href="/logo.png">
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
+  <link rel="stylesheet" href="/css/automations.css?v=3">
+  <link rel="stylesheet" href="/css/dashboard.css?v=4">
+  <link rel="stylesheet" href="/app/app.css?v=1">
+  <script>window.__RETNER_STORE__ = "__RETNER_STORE_JSON__";</script>
+  <script src="/js/automations.js?v=3" defer></script>
+  <script src="/js/media.js?v=1" defer></script>
+  <script src="/js/analytics.js?v=2" defer></script>
+  <script src="/js/campaign-preview.js?v=1" defer></script>
+  <script src="/js/campaigns.js?v=1" defer></script>
+  <script src="/app/app.js?v=1" defer></script>
+</head>
+<body>
+  <!-- LOGIN -->
+  <div id="login" class="lg-wrap hidden">
+    <form class="lg-card" id="loginForm" autocomplete="on">
+      <img src="/full-logo.png" alt="Retner SmartPush">
+      <h1>Welcome back</h1>
+      <p>Sign in to your push dashboard</p>
+      <div class="field"><label for="storeId">Store ID</label><input class="input" id="storeId" placeholder="e.g. mystore" autocomplete="username"></div>
+      <div class="field"><label for="password">Password</label><input class="input" type="password" id="password" placeholder="••••••••" autocomplete="current-password"></div>
+      <button class="btn primary lg block" type="submit" id="loginBtn">Sign in</button>
+      <div class="lg-error hidden" id="loginError"></div>
+      <div class="lg-note">New here or forgot your password? Open the dashboard from your <b>Shopify admin → Apps → Retner SmartPush → Open Dashboard</b>. You can set a password in Settings.</div>
+    </form>
+  </div>
+
+  <!-- APP -->
+  <div id="app" class="app">
+    <div class="frame">
+      <header class="topbar">
+        <div class="brand"><img src="/full-logo.png" alt="Retner SmartPush"></div>
+        <nav class="nav" id="topnav">
+          <button data-view="home">Home</button>
+          <button data-view="campaigns">Campaigns</button>
+          <button data-view="automations">Automations</button>
+          <button data-view="subscribers">Subscribers</button>
+          <button data-view="analytics">Analytics</button>
+        </nav>
+        <div class="tb-right">
+          <button class="icon-btn" id="bellBtn" aria-label="Notifications" title="What's new"><i class="far fa-bell"></i><span class="dot hidden" id="bellDot"></span></button>
+          <button class="icon-btn" data-view="settings" aria-label="Settings" title="Settings"><i class="fas fa-gear"></i></button>
+          <div class="avatar" id="avatar" title="">R</div>
+        </div>
+      </header>
+
+      <aside class="rail">
+        <div class="grp">
+          <button data-view="home" data-tip="Home"><i class="fas fa-house"></i></button>
+          <button data-view="campaigns" data-tip="Campaigns"><i class="fas fa-bullhorn"></i></button>
+          <button data-view="automations" data-tip="Automations"><i class="fas fa-wand-magic-sparkles"></i></button>
+          <button data-view="subscribers" data-tip="Subscribers"><i class="fas fa-users"></i></button>
+          <button data-view="analytics" data-tip="Analytics"><i class="fas fa-chart-line"></i></button>
+        </div>
+        <div class="grp bottom">
+          <button data-view="settings" data-tip="Settings"><i class="fas fa-gear"></i></button>
+          <button id="helpBtn" data-tip="Help"><i class="far fa-circle-question"></i></button>
+          <button id="logoutBtn" data-tip="Log out"><i class="fas fa-arrow-right-from-bracket"></i></button>
+        </div>
+      </aside>
+
+      <main class="main">
+        <!-- HOME -->
+        <section class="view" id="view-home">
+          <div class="page-head">
+            <div><h1 id="greeting">Good morning</h1><p>Stay on top of your subscribers, campaigns and automations.</p></div>
+            <div class="head-actions">
+              <div class="seg" id="homeRange"><button data-days="7">7 days</button><button data-days="30" class="active">30 days</button><button data-days="90">90 days</button></div>
+              <button class="btn primary" data-view="creator"><i class="fas fa-plus"></i> New campaign</button>
+            </div>
+          </div>
+          <div class="grid-home">
+            <div>
+              <div class="kpis">
+                <div class="kpi"><div class="k-top"><span class="k-ic"><i class="fas fa-users"></i></span>Subscribers</div><div class="k-val"><span id="k-subs" class="skel">00000</span><span class="k-trend" id="k-subs-t"></span></div><div class="k-foot" id="k-subs-f">&nbsp;</div></div>
+                <div class="kpi"><div class="k-top"><span class="k-ic violet"><i class="fas fa-paper-plane"></i></span>Notifications sent</div><div class="k-val"><span id="k-sent" class="skel">00000</span><span class="k-trend" id="k-sent-t"></span></div><div class="k-foot" id="k-sent-f">&nbsp;</div></div>
+                <div class="kpi"><div class="k-top"><span class="k-ic amber"><i class="fas fa-hand-pointer"></i></span>Clicks</div><div class="k-val"><span id="k-clicks" class="skel">00000</span><span class="k-trend" id="k-clicks-t"></span></div><div class="k-foot" id="k-clicks-f">&nbsp;</div></div>
+                <div class="kpi"><div class="k-top"><span class="k-ic green"><i class="fas fa-indian-rupee-sign"></i></span>Revenue</div><div class="k-val"><span id="k-rev" class="skel">00000</span><span class="k-trend" id="k-rev-t"></span></div><div class="k-foot" id="k-rev-f">&nbsp;</div></div>
+              </div>
+              <div class="card">
+                <div class="card-head">
+                  <div><h3>Activity</h3><div class="big-num" id="chartTotal">—</div></div>
+                  <div class="seg" id="chartMetric"><button data-m="sent" class="active">Sent</button><button data-m="clicks">Clicks</button><button data-m="subscribers">Subscribers</button></div>
+                </div>
+                <div class="chart-big"><canvas id="homeChart"></canvas></div>
+              </div>
+            </div>
+            <div class="side">
+              <div class="card">
+                <h3>Quick actions</h3>
+                <p class="sub">Everything you do most, one click away.</p>
+                <div class="qa-grid">
+                  <div class="qa" data-view="creator"><i class="fas fa-paper-plane"></i>Campaign</div>
+                  <div class="qa" data-view="automations"><i class="fas fa-wand-magic-sparkles"></i>Automations</div>
+                  <div class="qa" data-view="settings"><i class="fas fa-gear"></i>Settings</div>
+                </div>
+              </div>
+              <div class="plan" id="planCard">
+                <h3 id="planName">Starter plan</h3>
+                <p id="planText">Loading your monthly usage…</p>
+                <div class="bar" id="planBar"><span style="width:0%"></span></div>
+                <small id="planFoot"></small>
+                <button class="btn block" id="planBtn"><i class="fas fa-bolt"></i> Upgrade plan</button>
+              </div>
+              <div class="card">
+                <div class="card-head"><h3>Recent campaigns</h3><button class="btn sm" data-view="campaigns">View all</button></div>
+                <ul class="list" id="recentList"><li class="muted">Loading…</li></ul>
+              </div>
+            </div>
+          </div>
+        </section>
+
+        <!-- CAMPAIGNS (history) -->
+        <section class="view" id="view-campaigns">
+          <div class="page-head">
+            <div><h1>Campaigns</h1><p>Every notification you sent or scheduled.</p></div>
+            <div class="head-actions"><button class="btn" id="processBtn"><i class="fas fa-rotate"></i> Process pending</button><button class="btn primary" data-view="creator"><i class="fas fa-plus"></i> New campaign</button></div>
+          </div>
+          <div class="kpis">
+            <div class="kpi"><div class="k-top"><span class="k-ic"><i class="fas fa-bullhorn"></i></span>Campaigns sent</div><div class="k-val"><span id="h-camp">0</span></div></div>
+            <div class="kpi"><div class="k-top"><span class="k-ic violet"><i class="fas fa-paper-plane"></i></span>Notifications delivered</div><div class="k-val"><span id="h-imp">0</span></div></div>
+            <div class="kpi"><div class="k-top"><span class="k-ic amber"><i class="fas fa-hand-pointer"></i></span>Average click rate</div><div class="k-val"><span id="h-ctr">0%</span></div></div>
+            <div class="kpi"><div class="k-top"><span class="k-ic green"><i class="fas fa-indian-rupee-sign"></i></span>Revenue</div><div class="k-val"><span id="h-rev">₹0</span></div></div>
+          </div>
+          <div class="card">
+            <div class="tabs" id="histTabs"><button data-f="all" class="active">All</button><button data-f="sent">Sent (<span id="count-sent">0</span>)</button><button data-f="scheduled">Scheduled (<span id="count-scheduled">0</span>)</button></div>
+            <div class="table-wrap"><table class="tbl"><thead><tr><th>When</th><th>Type</th><th>Title</th><th>Message</th><th>Status</th><th>Delivered</th></tr></thead><tbody id="historyTableBody"></tbody></table></div>
+          </div>
+        </section>
+
+        <!-- CAMPAIGN CREATOR -->
+        <section class="view" id="view-creator">
+          <div class="page-head">
+            <div><h1>Campaign creator</h1><p>Write once, see how it looks on every device, then send or schedule.</p></div>
+            <div class="head-actions"><button class="btn" data-view="campaigns"><i class="fas fa-arrow-left"></i> Back</button></div>
+          </div>
+          <div class="creator">
+            <div class="form">
+              <div class="cr-section">
+                <h3>Start from a template</h3>
+                <p class="sub">Pick one and edit the text, or write your own below.</p>
+                <div class="tpl-row" id="tplRow"></div>
+              </div>
+
+              <div class="cr-section">
+                <h3>Campaign type</h3>
+                <p class="sub">Flash sales can have an end time: shoppers who come online later do not get the notification.</p>
+                <div class="cr-type">
+                  <div class="pick active" data-type="regular"><b>Regular broadcast</b><span>Standard notification to all subscribers.</span></div>
+                  <div class="pick" data-type="flash"><b>Flash sale ⚡</b><span>Time-sensitive offer with an end time.</span></div>
+                </div>
+              </div>
+
+              <div class="cr-section">
+                <h3>Content</h3>
+                <p class="sub">Keep the title under 50 and the message under 120 characters so nothing gets cut off.</p>
+                <div class="field pos-rel">
+                  <label for="campTitle">Title <span class="req">*</span></label>
+                  <div class="input-row"><input class="input" id="campTitle" maxlength="120" placeholder="e.g. Weekend sale is live 🎉"><button type="button" class="emoji-btn" data-emoji-for="campTitle" aria-label="Add emoji"><i class="far fa-face-smile"></i></button></div>
+                  <div class="counter" id="titleCount">0 / 50</div>
+                </div>
+                <div class="field pos-rel">
+                  <label for="campMsg">Message <span class="req">*</span></label>
+                  <div class="input-row"><textarea class="input" id="campMsg" maxlength="500" placeholder="Describe your offer in one or two short sentences."></textarea><button type="button" class="emoji-btn" data-emoji-for="campMsg" aria-label="Add emoji"><i class="far fa-face-smile"></i></button></div>
+                  <div class="counter" id="msgCount">0 / 120</div>
+                </div>
+                <div class="field">
+                  <label for="campUrl">Primary link <span class="req">*</span></label>
+                  <input class="input" id="campUrl" placeholder="https://yourstore.com/collections/sale">
+                  <div class="help">Where shoppers land when they tap the notification. Click tracking and UTM tags are added for you.</div>
+                </div>
+                <div class="field">
+                  <label for="campDiscount">Discount code <a href="#" id="discountLink" target="_blank" rel="noopener" style="float:right; font-weight:600; font-size:12.5px;">View all in Shopify ↗</a></label>
+                  <input class="input" id="campDiscount" placeholder="e.g. WELCOME10">
+                  <div class="help">Added to the message as "Use code WELCOME10" if you leave it out of the text.</div>
+                </div>
+              </div>
+
+              <div class="cr-section">
+                <h3>Images</h3>
+                <p class="sub">One hero image works on Android and Windows (2:1, best at 1350 × 675). macOS and iPhone show only the icon.</p>
+                <div class="field"><label>Hero image</label><input type="hidden" id="campImg"><div data-media-for="campImg" data-purpose="hero" data-max-side="1440" data-hint="best at 1350 × 675 px (2:1)"></div></div>
+                <div class="field"><label>Icon / logo</label><input type="hidden" id="campIcon"><div data-media-for="campIcon" data-purpose="icon" data-max-side="256" data-hint="square, at least 192 × 192 px. Your store logo is used when empty."></div></div>
+              </div>
+
+              <div class="cr-section">
+                <h3>Buttons</h3>
+                <p class="sub">Up to two buttons on Android and Windows. Each can open a different link.</p>
+                <div id="btnRows"></div>
+                <button class="btn sm" type="button" id="addBtnRow"><i class="fas fa-plus"></i> Add button</button>
+              </div>
+
+              <div class="cr-section">
+                <h3>Audience</h3>
+                <p class="sub">Segments (by browser, activity and purchases) are coming next; for now every active subscriber gets this campaign.</p>
+                <div class="ok-box"><i class="fas fa-users"></i> Sending to <b id="estReach">…</b> active subscribers</div>
+              </div>
+
+              <div class="cr-section">
+                <h3>Schedule</h3>
+                <p class="sub">Send now, or pick a time: it goes out within 5 minutes of that time.</p>
+                <div class="cr-type">
+                  <div class="pick active" id="sel-now"><b>Send now</b><span>Goes out as soon as you confirm.</span></div>
+                  <div class="pick" id="sel-later"><b>Schedule for later</b><span>Pick a date and time.</span></div>
+                </div>
+                <div id="scheduleTimeWrapper" class="hidden" style="margin-top:14px;">
+                  <label for="scheduleTime" class="strong" style="font-size:13px;">Send date &amp; time</label>
+                  <input type="datetime-local" class="input" id="scheduleTime" style="margin-top:6px;">
+                  <div class="rc-hint" id="scheduleHint"></div>
+                </div>
+                <div class="flash-box hidden" id="expiryCard" style="margin-top:14px;">
+                  <h4><i class="fas fa-bolt"></i> Flash sale end time</h4>
+                  <p>Optional. Shoppers who come online after this do not get the notification, and a scheduled flash sale is not sent once the offer has ended.</p>
+                  <input type="datetime-local" class="input" id="expiryTime">
+                </div>
+                <div class="rc-error hidden" id="step3Error" role="alert"></div>
+              </div>
+
+              <div class="cr-foot">
+                <div class="reach"><i class="fas fa-circle-check" style="color:var(--ok)"></i> <span id="footNote">Ready when you are.</span></div>
+                <div style="display:flex; gap:8px;">
+                  <button class="btn" id="testBtn" type="button"><i class="far fa-bell"></i> Send test to me</button>
+                  <button class="btn primary lg" id="btnSend" type="button"><i class="fas fa-paper-plane"></i> Send campaign</button>
+                </div>
+              </div>
+            </div>
+            <div class="sticky"><div class="card rp-card"><div id="rpPreview"></div></div></div>
+          </div>
+        </section>
+
+        <!-- SUBSCRIBERS -->
+        <section class="view" id="view-subscribers">
+          <div class="page-head">
+            <div><h1>Subscribers</h1><p>Who said yes to your notifications, and how that is growing.</p></div>
+          </div>
+          <div class="kpis">
+            <div class="kpi"><div class="k-top"><span class="k-ic"><i class="fas fa-users"></i></span>Subscribers</div><div class="k-val"><span id="s-total" class="skel">0000</span></div><div class="k-foot" id="s-total-f">&nbsp;</div></div>
+            <div class="kpi"><div class="k-top"><span class="k-ic green"><i class="fas fa-arrow-trend-up"></i></span>Gained, last 7 days</div><div class="k-val"><span id="s-gain" class="skel">000</span><span class="k-trend" id="s-gain-t"></span></div><div class="k-foot" id="s-gain-f">&nbsp;</div></div>
+            <div class="kpi"><div class="k-top"><span class="k-ic amber"><i class="fas fa-eye"></i></span>Active, last 7 days</div><div class="k-val"><span id="s-active" class="skel">000</span></div><div class="k-foot">Visited your store with notifications on</div></div>
+            <div class="kpi"><div class="k-top"><span class="k-ic violet"><i class="fas fa-user-xmark"></i></span>Unsubscribed</div><div class="k-val"><span id="s-lost" class="skel">00</span></div><div class="k-foot">Turned notifications off, all time</div></div>
+          </div>
+          <div class="sub-grid">
+            <div class="card">
+              <div class="card-head"><div><h3>Subscriber growth</h3><div class="muted" style="font-size:12.5px" id="subRangeText">Last 30 days</div></div><div class="seg" id="subRange"><button data-days="7">7</button><button data-days="30" class="active">30</button><button data-days="90">90</button></div></div>
+              <div class="chart-big"><canvas id="subChart"></canvas></div>
+            </div>
+            <div class="side">
+              <div class="card"><h3>Segments</h3><p class="sub">Targeting by segment is coming to the campaign creator.</p><ul class="seg-list" id="segList"><li class="muted">Loading…</li></ul></div>
+            </div>
+          </div>
+          <div class="card" style="margin-top:20px;">
+            <div class="card-head"><h3>Latest subscribers</h3><span class="chip" id="subListNote"></span></div>
+            <div class="table-wrap"><table class="tbl"><thead><tr><th>Subscribed</th><th>Subscriber</th><th>Browser</th><th>Last seen</th><th>Status</th></tr></thead><tbody id="subscribersTableBody"></tbody></table></div>
+          </div>
+        </section>
+
+        <!-- ANALYTICS / AUTOMATIONS (rendered by their modules) -->
+        <section class="view" id="view-analytics"><div id="analytics-root"></div></section>
+        <section class="view" id="view-automations"><div id="automations-root"></div></section>
+
+        <!-- SETTINGS -->
+        <section class="view" id="view-settings">
+          <div class="page-head"><div><h1>Settings</h1><p>Your store details, logo and dashboard login.</p></div></div>
+          <div class="settings-grid">
+            <div class="card">
+              <h3>Store</h3>
+              <p class="sub">The name and logo shoppers see in notifications.</p>
+              <div class="field"><label for="setStoreName">Store name</label><input class="input" id="setStoreName" placeholder="My Store"></div>
+              <div class="field"><label>Store logo</label><input type="hidden" id="setLogoUrl"><div data-media-for="setLogoUrl" data-purpose="logo" data-max-side="512" data-hint="square works best"></div><div class="help">Used as the notification icon when a campaign has none.</div></div>
+              <div class="field"><label for="setStoreEmail">Contact email</label><input class="input" type="email" id="setStoreEmail" placeholder="you@yourstore.com"><div class="help">Sent to push services as the sender contact.</div></div>
+              <div class="row-between" style="background:var(--surface-2); padding:14px; border-radius:14px; margin-bottom:16px;">
+                <div><b>Skip the custom popup</b><div class="help">Show the browser's own permission prompt straight away.</div></div>
+                <label class="switch"><input type="checkbox" id="setDirectPrompt"><span></span></label>
+              </div>
+              <button class="btn primary" id="saveSettingsBtn">Save changes</button>
+              <span class="chip ok hidden" id="saveMsg" style="margin-left:10px;">Saved</span>
+            </div>
+            <div class="card">
+              <h3>Dashboard password</h3>
+              <p class="sub">Optional. Lets you sign in here without opening Shopify. At least 10 characters.</p>
+              <div class="field"><label for="setNewPassword">New password</label><input class="input" type="password" id="setNewPassword" autocomplete="new-password" placeholder="At least 10 characters"></div>
+              <button class="btn" id="savePasswordBtn">Set password</button>
+              <div id="pwMsg" class="help" style="margin-top:10px;"></div>
+            </div>
+          </div>
+        </section>
+      </main>
+    </div>
+  </div>
+</body>
+</html>
