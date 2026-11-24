@@ -490,9 +490,12 @@ async function markExpired(db, endpoint) {
     await db.query(`UPDATE subscriptions SET status = 'expired', expired_at = NOW() WHERE endpoint = $1 AND status IS DISTINCT FROM 'expired'`, [endpoint]);
 }
 
-// Returns { ok, expired, error }. Tries every VAPID pair (see vapidKeyPairs)
-// until the push service accepts one.
-async function sendPush(db, webPush, sub, payload, options) {
+// Returns { ok, expired, gone, error }. Tries every VAPID pair (see
+// vapidKeyPairs) until the push service accepts one.
+// `keepOnGone`: a 404/410 is reported as { gone: true } and the subscription
+// is NOT marked expired. FCM answers 410 for a subscription created a moment
+// ago, so the welcome push must not treat that as an unsubscribe.
+async function sendPush(db, webPush, sub, payload, options, { keepOnGone = false } = {}) {
     const base = (options && options.vapidDetails) || {};
     const pairs = vapidKeyPairs();
     const first = pairs.findIndex((p) => p.publicKey === base.publicKey);
@@ -507,6 +510,7 @@ async function sendPush(db, webPush, sub, payload, options) {
             return { ok: true };
         } catch (e) {
             if (e && (e.statusCode === 404 || e.statusCode === 410)) {
+                if (keepOnGone) return { ok: false, gone: true, error: `push service not ready (${e.statusCode})` };
                 await markExpired(db, sub.endpoint);
                 return { ok: false, expired: true, error: `expired (${e.statusCode})` };
             }
@@ -545,13 +549,85 @@ async function logFinish(db, logId, result) {
 }
 
 // One automated push: log -> send -> finish log.
-async function sendAutomated(ctx, { store, automation, step, sub, refId, title, body, image, targetUrl, button, tag }) {
+async function sendAutomated(ctx, { store, automation, step, sub, refId, title, body, image, targetUrl, button, tag, keepOnGone = false }) {
     const logId = await logStart(ctx.db, { storeId: store.store_id, automation, step, endpoint: sub.endpoint, refId });
     const url = automationClickUrl(logId, targetUrl);
     const payload = buildPayload({ title, body, icon: storeIcon(store), image, url, button, tag, automation, logId });
-    const result = await sendPush(ctx.db, ctx.webPush, sub, payload, vapidOptions(store));
+    const result = await sendPush(ctx.db, ctx.webPush, sub, payload, vapidOptions(store), { keepOnGone });
     await logFinish(ctx.db, logId, result);
     return { ...result, logId };
+}
+
+// --------------------------------------------------------------------------
+// Welcome notification
+// --------------------------------------------------------------------------
+const WELCOME_RETRY_MS = [1500, 4000];
+
+// Sends the welcome push to one subscriber. `fresh: true` (right after the
+// subscribe call) retries a 404/410 a couple of times and never marks the
+// subscription expired: the cron's catch-up (runWelcomeCatchup) sends it a few
+// minutes later if the push service still was not ready.
+async function sendWelcome(ctx, store, sub, { fresh = false, sleep = (ms) => new Promise((r) => setTimeout(r, ms)) } = {}) {
+    const vars = { store_name: store.store_name || store.store_id };
+    const domain = /^[a-z0-9.-]+$/i.test(sub.store_domain || '') ? sub.store_domain : `${store.store_id}.myshopify.com`;
+    const message = {
+        store,
+        automation: 'welcome',
+        step: 1,
+        sub: { endpoint: sub.endpoint, keys: sub.keys },
+        refId: null,
+        title: renderTemplate(store.welcome_title || WELCOME_DEFAULT.title, vars),
+        body: renderTemplate(store.welcome_body || WELCOME_DEFAULT.body, vars),
+        image: null,
+        targetUrl: `https://${domain}/?utm_source=retner-push&utm_medium=push&utm_campaign=welcome`,
+        button: 'Visit store',
+        tag: 'retner-welcome',
+        keepOnGone: fresh,
+    };
+    let result = await sendAutomated(ctx, message);
+    for (let i = 0; fresh && result.gone && i < WELCOME_RETRY_MS.length; i++) {
+        await sleep(WELCOME_RETRY_MS[i]);
+        result = await sendAutomated(ctx, message);
+    }
+    if (result.ok) await ctx.db.query('UPDATE stores SET welcome_sent_count = COALESCE(welcome_sent_count, 0) + 1 WHERE store_id = $1', [store.store_id]);
+    return result;
+}
+
+// Welcomes that did not get through right after subscribing (push service not
+// ready, server outage): subscribers from the last 24 hours with no delivered
+// welcome. A subscription that was marked expired by a 410 within 2 minutes of
+// being created is restored first; a 410 now is a real unsubscribe.
+async function runWelcomeCatchup(ctx, summary, onlyStore) {
+    const { rows: stores } = await ctx.db.query(
+        `SELECT store_id, store_name, logo_url, store_email, welcome_enabled, welcome_title, welcome_body
+         FROM stores WHERE welcome_enabled = TRUE ${onlyStore ? 'AND store_id = $1' : ''}`,
+        onlyStore ? [onlyStore] : []
+    );
+    for (const store of stores) {
+        const { rows: subs } = await ctx.db.query(
+            `SELECT s.endpoint, s.keys, s.store_domain, s.status
+             FROM subscriptions s
+             WHERE s.store_id = $1
+               AND s.created_at >= (NOW() AT TIME ZONE 'UTC') - INTERVAL '24 hours'
+               AND s.created_at <= (NOW() AT TIME ZONE 'UTC') - INTERVAL '2 minutes'
+               AND NOT EXISTS (SELECT 1 FROM push_automation_log l WHERE l.endpoint = s.endpoint AND l.automation = 'welcome' AND l.status = 'sent')
+               AND (SELECT COUNT(*) FROM push_automation_log l WHERE l.endpoint = s.endpoint AND l.automation = 'welcome' AND l.sent_at > (s.created_at AT TIME ZONE 'UTC') + INTERVAL '2 minutes') < 2
+               AND (s.status IS DISTINCT FROM 'expired'
+                    OR EXISTS (SELECT 1 FROM push_automation_log l WHERE l.endpoint = s.endpoint AND l.automation = 'welcome' AND l.status = 'expired'
+                               AND l.sent_at < (s.created_at AT TIME ZONE 'UTC') + INTERVAL '2 minutes'))
+             ORDER BY s.created_at ASC
+             LIMIT $2`,
+            [store.store_id, ctx.perStoreLimit]
+        );
+        for (const sub of subs) {
+            if (!ctx.budget.take()) return;
+            if (sub.status === 'expired') {
+                await ctx.db.query(`UPDATE subscriptions SET status = NULL, expired_at = NULL WHERE endpoint = $1 AND status = 'expired'`, [sub.endpoint]);
+            }
+            const r = await sendWelcome(ctx, store, sub);
+            if (r.ok) summary.welcome++;
+        }
+    }
 }
 
 // Subscribers that already got DAILY_CAP_PER_SUBSCRIBER automated pushes in 24h.
@@ -1124,12 +1200,13 @@ async function runAutomations({ db, webPush, now = new Date(), onlyStore = null,
     await ensureSchema(db);
     const ctx = { db, webPush, now, budget: makeBudget(budget), perStoreLimit, fetch: fetchImpl };
     const summary = {
-        scheduledCampaigns: 0, expiredCampaigns: 0, campaignPushes: 0, abandoned: 0, browse: 0, winback: 0, thankYou: 0,
+        scheduledCampaigns: 0, expiredCampaigns: 0, campaignPushes: 0, welcome: 0, abandoned: 0, browse: 0, winback: 0, thankYou: 0,
         productChecks: 0, productCheckErrors: 0, priceDrops: 0, restocks: 0, priceDropPushes: 0, restockPushes: 0,
         expiredCarts: 0, stores: 0, errors: [],
     };
 
     await runScheduledCampaigns(ctx, summary, onlyStore);
+    try { await runWelcomeCatchup(ctx, summary, onlyStore); } catch (e) { summary.errors.push(`welcome catch-up: ${e.message}`); }
 
     const { rows: stores } = await db.query(
         `SELECT store_id, store_name, logo_url, store_email, automation_settings, abandoned_config
@@ -1391,6 +1468,8 @@ module.exports = {
     activeSubscriptions,
     vapidOptions,
     campaignButtons,
+    sendWelcome,
+    runWelcomeCatchup,
     WELCOME_DEFAULT,
     vapidKeyPairs,
     primaryVapidPublicKey,

@@ -2047,23 +2047,10 @@ app.post('/api/trigger-welcome', async (req, res) => {
         const store = await automations.loadStore(db, storeId);
         if (!store || !store.welcome_enabled) return res.json({ success: true, skipped: true });
 
-        const sub = subRes.rows[0];
-        const domain = /^[a-z0-9.-]+$/i.test(sub.store_domain || '') ? sub.store_domain : `${storeId}.myshopify.com`;
-        const result = await automations.sendAutomated({ db, webPush }, {
-            store,
-            automation: 'welcome',
-            step: 1,
-            sub: { endpoint: sub.endpoint, keys: sub.keys },
-            refId: null,
-            title: automations.renderTemplate(store.welcome_title || automations.WELCOME_DEFAULT.title, { store_name: store.store_name || storeId }),
-            body: automations.renderTemplate(store.welcome_body || automations.WELCOME_DEFAULT.body, { store_name: store.store_name || storeId }),
-            image: null,
-            targetUrl: `https://${domain}/?utm_source=retner-push&utm_medium=push&utm_campaign=welcome`,
-            button: 'Visit store',
-            tag: 'retner-welcome',
-        });
-        if (result.ok) await db.query('UPDATE stores SET welcome_sent_count = COALESCE(welcome_sent_count, 0) + 1 WHERE store_id = $1', [storeId]);
-        res.json({ success: !!result.ok });
+        // fresh: the subscription was created a moment ago, so a 410 from the
+        // push service is retried and never treated as an unsubscribe.
+        const result = await automations.sendWelcome({ db, webPush }, store, subRes.rows[0], { fresh: true });
+        res.json({ success: !!result.ok, pending: !!result.gone });
     } catch (e) {
         console.error('Welcome Trigger Failed', e.message);
         res.status(500).json({ success: false, error: 'Server error' });
