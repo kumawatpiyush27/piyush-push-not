@@ -124,17 +124,20 @@
     return '<span class="rc-badge rc-' + s[1] + '"' + (s[2] ? ' title="' + esc(s[2]) + '"' : '') + '>' + esc(s[0]) + '</span>';
   }
   function isDelivered(c) { return c.status === 'sent' || !c.status; }
+  // Same keys as SEGMENTS in backend/automations.js.
+  var SEGMENT_NAMES = { all: 'All subscribers', active_7d: 'Active 7 days', active_30d: 'Active 30 days', new_7d: 'New this week', inactive_30d: 'Inactive 30+ days', cart_30d: 'Added to cart', buyers_30d: 'Bought recently', chrome: 'Chrome', safari: 'Safari / iPhone', firefox: 'Firefox', edge: 'Edge' };
+  function segmentName(key) { return SEGMENT_NAMES[key] || (key ? key : 'All subscribers'); }
   function historyRow(c) {
     var when = c.status === 'scheduled' && c.scheduled_at
       ? '<span class="rc-when"><i class="far fa-clock"></i> ' + esc(fmt(c.scheduled_at)) + '</span>'
       : esc(c.created_at ? new Date(c.created_at).toLocaleString('en-IN', { day: 'numeric', month: 'short', year: 'numeric', hour: 'numeric', minute: '2-digit' }) : '-');
-    var type = c.type === 'flash' ? '⚡ Flash sale' : 'Regular';
+    var type = (c.type === 'flash' ? '⚡ Flash sale' : 'Regular') + (c.segment && c.segment !== 'all' ? '<div class="rc-seg"><i class="fas fa-users"></i> ' + esc(segmentName(c.segment)) + '</div>' : '');
     var msg = String(c.message || '');
     var action = c.status === 'scheduled'
       ? ' <button class="rc-cancel" type="button" data-cancel="' + esc(c.id) + '">Cancel</button>' : '';
     return '<tr class="rc-row">' +
       '<td>' + when + '</td>' +
-      '<td>' + esc(type) + '</td>' +
+      '<td>' + type + '</td>' +
       '<td class="rc-title">' + esc(c.title) + '</td>' +
       '<td class="rc-msg" title="' + esc(msg) + '">' + esc(msg.length > 60 ? msg.slice(0, 60) + '…' : msg) + '</td>' +
       '<td>' + statusBadge(c) + action + '</td>' +
@@ -176,6 +179,7 @@
     statusBadge: statusBadge,
     historyRow: historyRow,
     isDelivered: isDelivered,
+    segmentName: segmentName,
     showError: showError,
   };
 })();

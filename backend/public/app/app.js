@@ -136,6 +136,15 @@
     $('avatar').title = window.store.name || window.store.id;
     if (window.RetnerMedia) window.RetnerMedia.attachAll(document);
     initCreator();
+    // The saved session may carry an old store name; use the current one.
+    api('/my-store/details').then(function (r) {
+      var n = r.ok && r.data.success && r.data.store && r.data.store.store_name;
+      if (n && n !== window.store.name) {
+        window.store.name = n;
+        try { localStorage.setItem('store', JSON.stringify(window.store)); } catch (e) { /* ignore */ }
+        greeting(); $('avatar').textContent = n.charAt(0).toUpperCase(); $('avatar').title = n;
+      }
+    });
     var q = new URLSearchParams(window.location.search).get('view');
     var h = window.location.hash.replace('#', '');
     showView(q || h || 'home', { silent: !!h });
@@ -299,15 +308,46 @@
     document.querySelectorAll('[data-emoji-for]').forEach(function (b) { b.addEventListener('click', function (e) { e.stopPropagation(); openEmoji(b, b.getAttribute('data-emoji-for')); }); });
     document.addEventListener('click', function (e) { var pop = document.querySelector('.emoji-pop'); if (pop && !pop.contains(e.target)) pop.remove(); });
     $('discountLink').href = 'https://admin.shopify.com/store/' + encodeURIComponent(window.store.id) + '/discounts';
+    $('segGrid').addEventListener('click', function (e) {
+      var c = e.target.closest('[data-seg]'); if (!c) return;
+      segment = c.getAttribute('data-seg'); renderSegments();
+    });
+    $('segGrid').addEventListener('keydown', function (e) {
+      var c = e.target.closest ? e.target.closest('[data-seg]') : null;
+      if (c && (e.key === 'Enter' || e.key === ' ')) { e.preventDefault(); segment = c.getAttribute('data-seg'); renderSegments(); }
+    });
     $('btnSend').addEventListener('click', sendCampaign);
     $('testBtn').addEventListener('click', sendTest);
     counters();
   }
+  var segments = [], segment = 'all';
   loaders.creator = function () {
-    api('/my-store/stats').then(function (r) { $('estReach').textContent = r.ok ? num(r.data.subscribers) : '—'; });
+    loadSegments();
     if (window.RetnerCampaigns) window.RetnerCampaigns.onScheduleMode(scheduleMode);
     preview();
   };
+  function loadSegments() {
+    api('/my-store/segments').then(function (r) {
+      if (!r.ok || !r.data.success) { $('segGrid').innerHTML = '<div class="muted">Could not load audiences. Everyone will receive this campaign.</div>'; return; }
+      segments = r.data.segments;
+      if (!segments.some(function (s) { return s.key === segment; })) segment = 'all';
+      renderSegments();
+    });
+  }
+  var SEG_ICONS = { all: 'fa-users', active_7d: 'fa-bolt', active_30d: 'fa-calendar', new_7d: 'fa-user-plus', inactive_30d: 'fa-moon', cart_30d: 'fa-cart-shopping', buyers_30d: 'fa-bag-shopping', chrome: 'fab fa-chrome', safari: 'fab fa-safari', firefox: 'fab fa-firefox-browser', edge: 'fab fa-edge' };
+  function renderSegments() {
+    $('segGrid').innerHTML = segments.map(function (s) {
+      var ic = SEG_ICONS[s.key] || 'fa-users';
+      return '<div class="seg-card' + (s.key === segment ? ' active' : '') + (s.count ? '' : ' empty') + '" data-seg="' + esc(s.key) + '" role="radio" aria-checked="' + (s.key === segment) + '" tabindex="0">' +
+        '<span class="ic"><i class="' + (ic.indexOf('fab') === 0 ? ic : 'fas ' + ic) + '"></i></span><div><b>' + esc(s.name) + '</b>' + (s.desc ? '<span>' + esc(s.desc) + '</span>' : '') + '</div><em>' + num(s.count) + '</em></div>';
+    }).join('');
+    updateReach();
+  }
+  function updateReach() {
+    var s = segments.filter(function (x) { return x.key === segment; })[0];
+    $('estReach').textContent = s ? num(s.count) : '…';
+    $('segName').textContent = s ? s.name : 'All subscribers';
+  }
   function preview() { if (window.RetnerPreview) window.RetnerPreview.render(); }
   function counters() {
     var t = $('campTitle').value.length, m = $('campMsg').value.length;
@@ -382,7 +422,7 @@
     var code = val('campDiscount').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 40);
     return {
       title: val('campTitle'), message: messageWithCode(val('campMsg'), code), url: val('campUrl'),
-      image: val('campImg'), icon: val('campIcon'), type: cType, schedule: scheduleMode,
+      image: val('campImg'), icon: val('campIcon'), type: cType, schedule: scheduleMode, segment: segment,
       scheduledAt: scheduleMode === 'later' && val('scheduleTime') ? new Date(val('scheduleTime')).toISOString() : null,
       expiryAt: cType === 'flash' && val('expiryTime') ? new Date(val('expiryTime')).toISOString() : null,
       btn1Text: val('btn1Txt'), btn1UrlRaw: val('btn1Link'), btn2Text: val('btn2Txt'), btn2UrlRaw: val('btn2Link'),
@@ -394,7 +434,8 @@
     if (window.RetnerCampaigns && window.RetnerCampaigns.validateStep3(scheduleMode, cType)) return;
     var reach = $('estReach').textContent;
     var when = scheduleMode === 'later' && window.RetnerCampaigns ? window.RetnerCampaigns.describeSchedule(scheduleMode) : 'now';
-    if (!window.confirm((scheduleMode === 'later' ? 'Schedule this campaign for ' + when : 'Send this campaign now') + ' to ' + reach + ' subscribers?')) return;
+    if (reach === '0') { toast('This audience has no subscribers right now. Pick another audience.', 'err'); return; }
+    if (!window.confirm((scheduleMode === 'later' ? 'Schedule this campaign for ' + when : 'Send this campaign now') + ' to ' + reach + ' subscribers (' + $('segName').textContent + ')?')) return;
     var btn = $('btnSend'); btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> ' + (scheduleMode === 'later' ? 'Scheduling…' : 'Sending…');
     api('/my-store/broadcast', { method: 'POST', body: campaignBody() }).then(function (r) {
       btn.disabled = false;
@@ -422,6 +463,7 @@
     ['campTitle', 'campMsg', 'campUrl', 'campDiscount', 'scheduleTime', 'expiryTime'].forEach(function (id) { $(id).value = ''; });
     ['campImg', 'campIcon'].forEach(function (id) { var el = $(id); el.value = ''; if (el.__rm) el.__rm.setValue(''); });
     $('btnRows').innerHTML = ''; btnCount = 0; $('addBtnRow').classList.remove('hidden');
+    segment = 'all'; renderSegments();
     setType('regular'); setSchedule('now'); counters(); preview();
   }
 

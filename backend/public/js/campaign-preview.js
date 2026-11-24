@@ -44,17 +44,20 @@
     return state.name || (s && s.name) || 'Your store';
   }
 
-  // Store logo + real name for the icon fallback (once).
+  // Store logo + real name for the icon fallback. Waits for the dashboard
+  // session (the fetch needs its token) and retries until it succeeds.
   function loadDetails() {
-    if (state.loaded) return;
-    state.loaded = true;
-    fetch('/my-store/details').then(function (r) { return r.json(); }).then(function (d) {
+    if (state.loaded || state.loading || !currentStore()) return;
+    state.loading = true;
+    fetch('/my-store/details').then(function (r) { return r.ok ? r.json() : null; }).then(function (d) {
+      state.loading = false;
       if (d && d.store) {
+        state.loaded = true;
         state.logo = https(d.store.logo_url);
         if (d.store.store_name) state.name = d.store.store_name;
         render();
       }
-    }).catch(function () { /* preview still works without it */ });
+    }).catch(function () { state.loading = false; });
   }
 
   function data() {

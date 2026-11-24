@@ -1086,12 +1086,45 @@ async function runProductEvents(ctx, store, settings, summary) {
 // --------------------------------------------------------------------------
 // Campaigns (broadcasts) — shared by "send now" and the scheduler
 // --------------------------------------------------------------------------
-async function activeSubscriptions(db, storeId) {
+// Audience segments for campaigns. `where` is appended to a query over
+// subscriptions aliased as `s` (store + not expired already applied).
+const BROWSER_SQL = `CASE WHEN s.endpoint ILIKE '%fcm.googleapis%' OR s.endpoint ILIKE '%android.googleapis%' THEN 'chrome'
+                          WHEN s.endpoint ILIKE '%mozilla%' THEN 'firefox' WHEN s.endpoint ILIKE '%apple%' THEN 'safari'
+                          WHEN s.endpoint ILIKE '%windows.com%' THEN 'edge' ELSE 'other' END`;
+const SEGMENTS = {
+    all: { name: 'All subscribers', desc: 'Everyone with notifications on.', where: '' },
+    active_7d: { name: 'Active in the last 7 days', desc: 'Visited your store this week.', where: `AND s.last_seen_at >= NOW() - INTERVAL '7 days'` },
+    active_30d: { name: 'Active in the last 30 days', desc: 'Visited your store this month.', where: `AND s.last_seen_at >= NOW() - INTERVAL '30 days'` },
+    new_7d: { name: 'New this week', desc: 'Subscribed in the last 7 days.', where: `AND s.created_at >= (NOW() AT TIME ZONE 'UTC') - INTERVAL '7 days'` },
+    inactive_30d: { name: 'Inactive for 30+ days', desc: 'Have not visited for a month. Good for win-back offers.', where: `AND (s.last_seen_at IS NULL OR s.last_seen_at < NOW() - INTERVAL '30 days')` },
+    cart_30d: { name: 'Added to cart recently', desc: 'Put something in their cart in the last 30 days.', where: `AND EXISTS (SELECT 1 FROM push_carts c WHERE c.endpoint = s.endpoint AND c.updated_at >= NOW() - INTERVAL '30 days')` },
+    buyers_30d: { name: 'Bought recently', desc: 'Placed an order in the last 30 days.', where: `AND EXISTS (SELECT 1 FROM push_orders o WHERE o.endpoint = s.endpoint AND o.created_at >= NOW() - INTERVAL '30 days')` },
+    chrome: { name: 'Chrome users', desc: 'Android and desktop Chrome.', where: `AND ${BROWSER_SQL} = 'chrome'` },
+    safari: { name: 'Safari / iPhone users', desc: 'Apple devices.', where: `AND ${BROWSER_SQL} = 'safari'` },
+    firefox: { name: 'Firefox users', desc: '', where: `AND ${BROWSER_SQL} = 'firefox'` },
+    edge: { name: 'Edge users', desc: '', where: `AND ${BROWSER_SQL} = 'edge'` },
+};
+function segmentWhere(key) {
+    const seg = SEGMENTS[key || 'all'];
+    return seg ? seg.where : null;
+}
+
+async function activeSubscriptions(db, storeId, segment = 'all') {
+    const where = segmentWhere(segment);
+    if (where === null) throw new Error(`Unknown segment: ${segment}`);
     const { rows } = await db.query(
-        `SELECT endpoint, keys FROM subscriptions WHERE store_id = $1 AND status IS DISTINCT FROM 'expired'`,
+        `SELECT s.endpoint, s.keys FROM subscriptions s WHERE s.store_id = $1 AND s.status IS DISTINCT FROM 'expired' ${where}`,
         [storeId]
     );
     return rows;
+}
+
+// Subscriber count per segment, for the audience picker.
+async function countSegments(db, storeId) {
+    const keys = Object.keys(SEGMENTS);
+    const cols = keys.map((k, i) => `COUNT(*) FILTER (WHERE TRUE ${SEGMENTS[k].where})::int AS c${i}`).join(', ');
+    const { rows } = await db.query(`SELECT ${cols} FROM subscriptions s WHERE s.store_id = $1 AND s.status IS DISTINCT FROM 'expired'`, [storeId]);
+    return keys.map((k, i) => ({ key: k, name: SEGMENTS[k].name, desc: SEGMENTS[k].desc, count: rows[0] ? rows[0][`c${i}`] : 0 }));
 }
 
 function appendCampaignUtm(url, campaignId) {
@@ -1110,7 +1143,7 @@ function campaignButtons(camp, given) {
 
 async function sendCampaign(ctx, store, camp, buttons) {
     const { btn1Text, btn1Url, btn2Text, btn2Url } = campaignButtons(camp, buttons);
-    const subs = await activeSubscriptions(ctx.db, camp.store_id);
+    const subs = await activeSubscriptions(ctx.db, camp.store_id, SEGMENTS[camp.segment] ? camp.segment : 'all');
     const mainUrl = campaignClickUrl(camp.id, appendCampaignUtm(camp.url, camp.id) || `https://${camp.store_id}.myshopify.com/`);
     const actions = [];
     if (btn1Text) actions.push({ action: 'b1', title: clampStr(btn1Text, LIMITS.button), url: campaignClickUrl(camp.id, appendCampaignUtm(btn1Url || camp.url, camp.id)) });
@@ -1468,6 +1501,9 @@ module.exports = {
     activeSubscriptions,
     vapidOptions,
     campaignButtons,
+    SEGMENTS,
+    segmentWhere,
+    countSegments,
     sendWelcome,
     runWelcomeCatchup,
     WELCOME_DEFAULT,

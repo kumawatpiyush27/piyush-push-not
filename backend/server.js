@@ -70,6 +70,7 @@ const initCampaignTable = async () => {
             await getPool().query('ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS clicks INTEGER DEFAULT 0');
             await getPool().query('ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS revenue DECIMAL(10,2) DEFAULT 0.00');
             await getPool().query('ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS buttons JSONB');
+            await getPool().query('ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS segment TEXT');
             console.log('✅ Campaigns table migrated');
         } catch (e) { console.log('Migration note:', e.message); }
 
@@ -562,6 +563,16 @@ app.get('/my-store/subscribers', async (req, res) => {
 });
 
 // Monthly notifications used vs the limit set by the super admin.
+// Subscriber counts per audience segment (campaign creator).
+app.get('/my-store/segments', async (req, res) => {
+    try {
+        res.json({ success: true, segments: await automations.countSegments(getPool(), req.storeId) });
+    } catch (e) {
+        console.error('Segments error:', e.message);
+        res.status(500).json({ success: false, error: 'Could not load audiences' });
+    }
+});
+
 app.get('/my-store/usage', async (req, res) => {
     try {
         res.json({ success: true, usage: await usage.getUsage(getPool(), req.storeId) });
@@ -671,10 +682,12 @@ const EXPIRY_MIN_MS = 5 * 60e3;            // offer must last at least 5 minutes
 // scheduled_at). Times are stored as UTC.
 app.post('/my-store/broadcast', async (req, res) => {
     const storeId = req.storeId;
-    const { title, message, url, image, icon, type, schedule, scheduledAt, expiryAt, btn1Text, btn1UrlRaw, btn2Text, btn2UrlRaw } = req.body || {};
+    const { title, message, url, image, icon, type, schedule, scheduledAt, expiryAt, btn1Text, btn1UrlRaw, btn2Text, btn2UrlRaw, segment } = req.body || {};
     const bad = (error) => res.status(400).json({ success: false, error });
     try {
         if (!title || !message) return bad('Title and message are required.');
+        const audience = segment ? String(segment) : 'all';
+        if (!automations.SEGMENTS[audience]) return bad('Pick a valid audience.');
         const now = Date.now();
 
         let sendAt = null;
@@ -705,14 +718,14 @@ app.post('/my-store/broadcast', async (req, res) => {
         const db = getPool();
         // Insert the campaign first: its id is used for click/revenue tracking.
         const insertResult = await db.query(
-            `INSERT INTO campaigns (store_id, title, message, url, image, icon, status, type, scheduled_at, expiry_at, buttons, sent_count, created_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 0, NOW()) RETURNING *`,
+            `INSERT INTO campaigns (store_id, title, message, url, image, icon, status, type, scheduled_at, expiry_at, buttons, segment, sent_count, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, 0, NOW()) RETURNING *`,
             [storeId, String(title).slice(0, 120), String(message).slice(0, 500), link,
              (image && String(image).startsWith('https://') && String(image).length < 500) ? image : null,
              (icon && String(icon).startsWith('https://') && String(icon).length < 500) ? icon : null,
              sendAt ? 'scheduled' : 'sending', type === 'flash' ? 'flash' : 'regular',
              sendAt ? sendAt.toISOString() : null, endsAt ? endsAt.toISOString() : null,
-             buttons ? JSON.stringify(buttons) : null]
+             buttons ? JSON.stringify(buttons) : null, audience]
         );
         const camp = insertResult.rows[0];
         if (sendAt) return res.json({ success: true, sent: 0, status: 'scheduled', id: camp.id, scheduled_at: sendAt.toISOString() });
