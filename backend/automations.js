@@ -421,14 +421,42 @@ async function ensureSchema(db) {
 // --------------------------------------------------------------------------
 // Sending
 // --------------------------------------------------------------------------
+// Two VAPID key pairs are in use. The storefront script subscribes browsers
+// with the store pair (STORE_VAPID_*); older and dashboard subscriptions were
+// made with PUBLIC_KEY/PRIVATE_KEY. A push service rejects a push signed with
+// a pair other than the one the subscription was made with, so sendPush tries
+// each pair in this order.
+function vapidKeyPairs() {
+    const pairs = [];
+    const add = (publicKey, privateKey) => {
+        if (publicKey && privateKey && !pairs.some((p) => p.publicKey === publicKey)) pairs.push({ publicKey, privateKey });
+    };
+    add(process.env.STORE_VAPID_PUBLIC_KEY, process.env.STORE_VAPID_PRIVATE_KEY);
+    add(process.env.PUBLIC_KEY, process.env.PRIVATE_KEY);
+    return pairs;
+}
+
+// The key new subscriptions should use.
+function primaryVapidPublicKey() {
+    const first = vapidKeyPairs()[0];
+    return first ? first.publicKey : (process.env.PUBLIC_KEY || null);
+}
+
 function vapidOptions(store, extra = {}) {
     const email = store && typeof store.store_email === 'string' && /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(store.store_email)
         ? `mailto:${store.store_email}` : DEFAULT_SUBJECT;
+    const first = vapidKeyPairs()[0] || { publicKey: process.env.PUBLIC_KEY, privateKey: process.env.PRIVATE_KEY };
     return {
-        vapidDetails: { subject: email, publicKey: process.env.PUBLIC_KEY, privateKey: process.env.PRIVATE_KEY },
+        vapidDetails: { subject: email, publicKey: first.publicKey, privateKey: first.privateKey },
         TTL: 24 * 60 * 60,
         ...extra,
     };
+}
+
+// 400/401/403 = the push service refused our credentials (FCM: "VAPID
+// credentials ... do not correspond", Apple: VapidPkHashMismatch, Mozilla: 401).
+function isCredentialRejection(e) {
+    return !!e && (e.statusCode === 400 || e.statusCode === 401 || e.statusCode === 403);
 }
 
 function storeIcon(store) {
@@ -456,18 +484,32 @@ async function markExpired(db, endpoint) {
     await db.query(`UPDATE subscriptions SET status = 'expired', expired_at = NOW() WHERE endpoint = $1 AND status IS DISTINCT FROM 'expired'`, [endpoint]);
 }
 
-// Returns { ok, expired, error }.
+// Returns { ok, expired, error }. Tries every VAPID pair (see vapidKeyPairs)
+// until the push service accepts one.
 async function sendPush(db, webPush, sub, payload, options) {
-    try {
-        await webPush.sendNotification({ endpoint: sub.endpoint, keys: sub.keys }, JSON.stringify(payload), options);
-        return { ok: true };
-    } catch (e) {
-        if (e && (e.statusCode === 404 || e.statusCode === 410)) {
-            await markExpired(db, sub.endpoint);
-            return { ok: false, expired: true, error: `expired (${e.statusCode})` };
+    const base = (options && options.vapidDetails) || {};
+    const pairs = vapidKeyPairs();
+    const first = pairs.findIndex((p) => p.publicKey === base.publicKey);
+    // The pair already in options goes first, then the others.
+    const ordered = first > 0 ? [pairs[first], ...pairs.filter((_, i) => i !== first)] : pairs;
+    const attempts = ordered.length ? ordered.map((p) => ({ ...options, vapidDetails: { ...base, ...p } })) : [options];
+    const body = JSON.stringify(payload);
+    let lastError = null;
+    for (let i = 0; i < attempts.length; i++) {
+        try {
+            await webPush.sendNotification({ endpoint: sub.endpoint, keys: sub.keys }, body, attempts[i]);
+            return { ok: true };
+        } catch (e) {
+            if (e && (e.statusCode === 404 || e.statusCode === 410)) {
+                await markExpired(db, sub.endpoint);
+                return { ok: false, expired: true, error: `expired (${e.statusCode})` };
+            }
+            lastError = e;
+            if (!isCredentialRejection(e)) break;
         }
-        return { ok: false, error: (e && (e.body || e.message)) ? String(e.body || e.message).slice(0, 300) : 'send failed' };
     }
+    const e = lastError;
+    return { ok: false, error: (e && (e.body || e.message)) ? String(e.body || e.message).slice(0, 300) : 'send failed' };
 }
 
 async function mapLimit(items, limit, fn) {
@@ -1324,5 +1366,7 @@ module.exports = {
     loadStore,
     activeSubscriptions,
     vapidOptions,
+    vapidKeyPairs,
+    primaryVapidPublicKey,
     storeIcon,
 };

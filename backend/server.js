@@ -380,7 +380,7 @@ app.get('/m/:file', async (req, res) => {
 });
 
 app.get('/api/vapid-public-key', (req, res) => {
-    res.json({ publicKey: process.env.PUBLIC_KEY || null });
+    res.json({ publicKey: automations.primaryVapidPublicKey() });
 });
 
 // Store Admin Dashboard HTML (SSO Enabled)
