@@ -19,6 +19,12 @@ const APP_BASE_URL = () => (process.env.APP_URL || 'https://push-retner.vercel.a
 
 const CART_WINDOW_MIN = 7 * 24 * 60;          // reminders only for carts active in the last 7 days
 const BROWSE_WINDOW_MIN = 72 * 60;            // product views older than 72h are ignored
+// Welcome text used when the merchant has not written their own. The editor
+// shows it, so what the merchant sees is what shoppers get.
+const WELCOME_DEFAULT = {
+    title: 'Welcome to {store_name}! 🎉',
+    body: 'Thanks for subscribing. You will be the first to know about new arrivals and offers.',
+};
 const DAILY_CAP_PER_SUBSCRIBER = 3;           // max automated pushes per subscriber per 24h
 const SEND_CONCURRENCY = 25;
 
@@ -1219,7 +1225,7 @@ async function getDashboard(db, storeId) {
 
     return {
         automations: {
-            welcome: { enabled: !!store.welcome_enabled, title: store.welcome_title || '', body: store.welcome_body || '' },
+            welcome: { enabled: !!store.welcome_enabled, title: store.welcome_title || WELCOME_DEFAULT.title, body: store.welcome_body || WELCOME_DEFAULT.body },
             ...settings,
         },
         stats,
@@ -1290,7 +1296,7 @@ async function sendTest(ctx, store, automation, stepIndex, subscription, overrid
         if (errors.length) return { ok: false, error: errors[0] };
         source = value;
     } else if (automation === 'welcome') {
-        source = { title: store.welcome_title || 'Welcome!', body: store.welcome_body || 'Thanks for subscribing.' };
+        source = { title: store.welcome_title || WELCOME_DEFAULT.title, body: store.welcome_body || WELCOME_DEFAULT.body };
     } else {
         source = normalizeSettings(store)[automation];
     }
@@ -1367,6 +1373,7 @@ module.exports = {
     loadStore,
     activeSubscriptions,
     vapidOptions,
+    WELCOME_DEFAULT,
     vapidKeyPairs,
     primaryVapidPublicKey,
     storeIcon,
