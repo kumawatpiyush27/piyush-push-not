@@ -559,10 +559,10 @@ app.get('/store-admin', async (req, res) => {
 
     </style>
     <link rel="stylesheet" href="/css/automations.css?v=3">
-    <link rel="stylesheet" href="/css/dashboard.css?v=2">
+    <link rel="stylesheet" href="/css/dashboard.css?v=3">
     <script src="/js/automations.js?v=3" defer></script>
     <script src="/js/media.js?v=1" defer></script>
-    <script src="/js/analytics.js?v=1" defer></script>
+    <script src="/js/analytics.js?v=2" defer></script>
 </head>
 <body>
 

@@ -20,9 +20,18 @@
     campaign_sent: { icon: 'fa-bullhorn', color: 'blue', label: 'Campaign sent' },
     campaign_clicked: { icon: 'fa-hand-pointer', color: 'purple', label: 'Campaign clicked' },
   };
+  // [label, pill tone, tooltip]
   var OUTCOMES = {
-    recovered: ['Recovered', 'ok'], purchased: ['Purchased', 'ok'], reminded: ['Reminder sent', 'info'],
-    waiting: ['Waiting', 'muted'], empty: ['Emptied', 'muted'], superseded: ['Replaced', 'muted'], expired: ['Expired', 'muted'],
+    recovered: ['Recovered', 'ok', 'Bought after a reminder.'],
+    purchased: ['Purchased', 'ok', 'Bought before any reminder was sent.'],
+    reminded: ['Reminder sent', 'info', 'All reminders have been sent.'],
+    waiting: ['Waiting', 'muted', 'The next reminder is scheduled.'],
+    unsubscribed: ['Unsubscribed', 'bad', 'This shopper turned off notifications, so no more reminders can be sent.'],
+    not_reminded: ['Not reminded', 'muted', 'No reminder reached this shopper. Carts older than 7 days are not reminded.'],
+    off: ['Automation off', 'muted', 'Cart recovery is off, so no reminder will be sent.'],
+    empty: ['Emptied', 'muted', 'The shopper removed everything from the cart.'],
+    superseded: ['Replaced', 'muted', 'The shopper started a newer cart.'],
+    expired: ['Expired', 'muted', 'This cart is too old.'],
   };
 
   // ------------------------------------------------------------- helpers
@@ -45,6 +54,15 @@
     return new Date(iso).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' });
   }
   function fullTime(iso) { return new Date(iso).toLocaleString('en-IN', { dateStyle: 'medium', timeStyle: 'short' }); }
+  // "Next reminder in 23 h" / "Next reminder in a few minutes" for a waiting cart.
+  function nextReminder(iso) {
+    if (!iso) return '';
+    var s = Math.round((new Date(iso).getTime() - Date.now()) / 1000);
+    if (s < 600) return 'Next reminder in a few minutes';
+    if (s < 3600) return 'Next reminder in ' + Math.round(s / 60) + ' min';
+    if (s < 86400) return 'Next reminder in ' + Math.round(s / 3600) + ' h';
+    return 'Next reminder in ' + Math.round(s / 86400) + ' d';
+  }
   function change(t) {
     if (!t || (!t.value && !t.previous)) return '';
     if (t.change === null) return t.value ? '<span class="ra2-chg ra2-new">New</span>' : '';
@@ -173,13 +191,15 @@
     } else {
       list = '<div class="ra2-table-wrap"><table class="ra2-table ra2-carts"><thead><tr><th>Cart</th><th>Value</th><th>Reminders</th><th>Last activity</th><th>Status</th></tr></thead><tbody>' +
         S.carts.map(function (c) {
-          var o = OUTCOMES[c.outcome] || [c.outcome, 'muted'];
+          var o = OUTCOMES[c.outcome] || [c.outcome, 'muted', ''];
+          var tip = c.outcome === 'waiting' && c.next_reminder_at ? nextReminder(c.next_reminder_at) + ' (' + fullTime(c.next_reminder_at) + ')' : o[2];
           var thumbs = c.items.map(function (i) { return i.image ? '<img src="' + esc(i.image) + '" alt="" loading="lazy">' : '<span class="ra2-thumb-ph"><i class="fas fa-box"></i></span>'; }).join('');
           var title = c.items[0] ? esc(c.items[0].title || 'Item') + (c.item_count > 1 ? ' <span class="ra2-muted">+' + (c.item_count - 1) + ' more</span>' : '') : esc(c.item_count + ' items');
           return '<tr><td><div class="ra2-cartcell"><div class="ra2-thumbs">' + thumbs + '</div><div><div class="ra2-strong">' + title + '</div><div class="ra2-muted">Subscriber #' + esc(c.subscriber || '—') + ' · ' + esc(c.browser) + '</div></div></div></td>' +
             '<td>' + money(c.total, c.currency) + '</td><td>' + num(c.reminders_sent) + (c.clicked_at ? ' <span class="ra2-pill info">clicked</span>' : '') + '</td>' +
             '<td title="' + esc(fullTime(c.updated_at)) + '">' + esc(ago(c.updated_at)) + '</td>' +
-            '<td><span class="ra2-pill ' + o[1] + '">' + o[0] + '</span></td></tr>';
+            '<td title="' + esc(tip) + '"><span class="ra2-pill ' + o[1] + '">' + esc(o[0]) + '</span>' +
+            (c.outcome === 'waiting' && c.next_reminder_at ? '<div class="ra2-muted ra2-next">' + esc(nextReminder(c.next_reminder_at)) + '</div>' : '') + '</td></tr>';
         }).join('') + '</tbody></table></div>' +
         (S.cartsDone ? '' : '<div class="ra2-more"><button class="ra2-btn" data-act="morecarts">Load more</button></div>');
     }

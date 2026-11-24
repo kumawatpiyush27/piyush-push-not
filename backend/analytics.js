@@ -4,6 +4,8 @@
 // cart recovery funnel + cart list, and a live event feed.
 // Every number comes from the database — nothing is estimated or simulated.
 
+const { normalizeSettings, CART_WINDOW_MIN } = require('./automations');
+
 const PERIODS = new Set([7, 30, 90]);
 const AUTOMATION_NAMES = {
     welcome: 'Welcome',
@@ -90,14 +92,14 @@ async function getAnalytics(db, storeId, { days = 30, tz = 'UTC' } = {}) {
                   WHERE store_id = $1 AND (created_at AT TIME ZONE 'UTC') >= ((NOW() AT TIME ZONE $2)::date - ($3::int - 1))::timestamp AT TIME ZONE $2
                   ORDER BY created_at DESC LIMIT 10`, sinceParam),
         db.query(`SELECT COUNT(*)::int AS tracked,
-                         COUNT(*) FILTER (WHERE steps_sent > 0)::int AS reminded,
-                         COUNT(*) FILTER (WHERE clicked_at IS NOT NULL)::int AS clicked,
-                         COUNT(*) FILTER (WHERE status = 'purchased')::int AS purchased,
-                         COUNT(*) FILTER (WHERE status = 'purchased' AND steps_sent > 0)::int AS recovered,
-                         COUNT(*) FILTER (WHERE status = 'active' AND item_count > 0)::int AS open_now,
-                         COALESCE(SUM(total_price) FILTER (WHERE status = 'active' AND item_count > 0), 0)::float AS open_value
-                  FROM push_carts
-                  WHERE store_id = $1 AND created_at >= ((NOW() AT TIME ZONE $2)::date - ($3::int - 1))::timestamp AT TIME ZONE $2`, sinceParam),
+                         COUNT(*) FILTER (WHERE COALESCE(r.sent, 0) > 0)::int AS reminded,
+                         COUNT(*) FILTER (WHERE c.clicked_at IS NOT NULL)::int AS clicked,
+                         COUNT(*) FILTER (WHERE c.status = 'purchased')::int AS purchased,
+                         COUNT(*) FILTER (WHERE c.status = 'purchased' AND COALESCE(r.sent, 0) > 0)::int AS recovered,
+                         COUNT(*) FILTER (WHERE c.status = 'active' AND c.item_count > 0)::int AS open_now,
+                         COALESCE(SUM(c.total_price) FILTER (WHERE c.status = 'active' AND c.item_count > 0), 0)::float AS open_value
+                  FROM push_carts c ${CART_SENT_JOIN}
+                  WHERE c.store_id = $1 AND c.created_at >= ((NOW() AT TIME ZONE $2)::date - ($3::int - 1))::timestamp AT TIME ZONE $2`, sinceParam),
         db.query(`SELECT COALESCE(SUM(total_price), 0)::float AS revenue, COUNT(*)::int AS orders FROM push_orders
                   WHERE store_id = $1 AND attributed_automation = 'abandoned_cart'
                     AND created_at >= ((NOW() AT TIME ZONE $2)::date - ($3::int - 1))::timestamp AT TIME ZONE $2`, sinceParam),
@@ -142,32 +144,67 @@ async function getAnalytics(db, storeId, { days = 30, tz = 'UTC' } = {}) {
     };
 }
 
-function cartOutcome(c) {
-    if (c.status === 'purchased') return c.steps_sent > 0 ? 'recovered' : 'purchased';
-    if (c.status === 'active') return c.steps_sent > 0 ? 'reminded' : 'waiting';
-    return c.status; // empty | superseded | expired
+// Status of one cart in the dashboard list, using the same rules as the
+// cart-recovery engine (automations.js runAbandonedCart):
+//   waiting       a reminder is still due (next_reminder_at says when)
+//   reminded      every reminder has been sent
+//   unsubscribed  the shopper turned notifications off, nothing more can be sent
+//   not_reminded  older than the 7-day reminder window, nothing was sent
+//   off           cart recovery is off, so nothing will be sent
+//   not_reminded  no reminder reached the shopper and none is left to send
+// c.steps_sent is the engine's step pointer (an old cart jumps straight to
+// step 2), so it decides the next step; c.reminders_sent is what was
+// actually delivered.
+function cartOutcome(c, cartConfig, now = Date.now()) {
+    const pointer = Number(c.steps_sent) || 0;
+    const delivered = c.reminders_sent === undefined ? pointer : Number(c.reminders_sent) || 0;
+    if (c.status === 'purchased') return { outcome: delivered > 0 ? 'recovered' : 'purchased' };
+    if (c.status !== 'active') return { outcome: c.status }; // empty | superseded | expired
+    if (!(Number(c.item_count) > 0)) return { outcome: 'empty' };
+    if (!c.subscriber || c.sub_status === 'expired') return { outcome: 'unsubscribed' };
+
+    const cfg = cartConfig || {};
+    const on = !!cfg.enabled && !cfg.needs_review;
+    if (!on) return { outcome: delivered > 0 ? 'reminded' : 'off' };
+    const steps = (Array.isArray(cfg.steps) ? cfg.steps : []).map((s, index) => ({ ...s, index }));
+    const next = steps.find((s) => s.enabled && s.index >= pointer);
+    const updated = new Date(c.updated_at).getTime();
+    if (!next || now - updated > CART_WINDOW_MIN * 60e3) return { outcome: delivered > 0 ? 'reminded' : 'not_reminded' };
+    return { outcome: 'waiting', next_reminder_at: new Date(updated + Number(next.delay_minutes) * 60e3).toISOString() };
 }
+
+// Reminders that actually reached the push service, per cart ($1 = store_id).
+const CART_SENT_JOIN = `LEFT JOIN (SELECT ref_id, COUNT(*)::int AS sent FROM push_automation_log
+                                   WHERE store_id = $1 AND automation = 'abandoned_cart' AND status = 'sent'
+                                   GROUP BY ref_id) r ON r.ref_id = c.id::text`;
 
 async function getCarts(db, storeId, { status = 'all', limit = 25, before = null } = {}) {
     limit = Math.min(Math.max(Number(limit) || 25, 1), 100);
     const filters = {
         all: '',
         open: `AND c.status = 'active' AND c.item_count > 0`,
-        recovered: `AND c.status = 'purchased' AND c.steps_sent > 0`,
-        reminded: `AND c.steps_sent > 0`,
+        recovered: `AND c.status = 'purchased' AND COALESCE(r.sent, 0) > 0`,
+        reminded: `AND COALESCE(r.sent, 0) > 0`,
     };
     const where = filters[status] !== undefined ? filters[status] : '';
     const params = [storeId, limit];
     let cursor = '';
     if (before && !Number.isNaN(Date.parse(before))) { params.push(new Date(before)); cursor = `AND c.updated_at < $3`; }
-    const { rows } = await db.query(
-        `SELECT c.id, c.created_at, c.updated_at, c.item_count, c.total_price::float AS total, c.currency, c.items,
-                c.steps_sent, c.last_sent_at, c.clicked_at, c.status, c.endpoint, s.id AS subscriber
-         FROM push_carts c LEFT JOIN subscriptions s ON s.endpoint = c.endpoint
-         WHERE c.store_id = $1 ${where} ${cursor}
-         ORDER BY c.updated_at DESC LIMIT $2`,
-        params
-    );
+    const [{ rows }, storeRes] = await Promise.all([
+        db.query(
+            `SELECT c.id, c.created_at, c.updated_at, c.item_count, c.total_price::float AS total, c.currency, c.items,
+                    c.steps_sent, COALESCE(r.sent, 0) AS reminders_sent, c.last_sent_at, c.clicked_at, c.status, c.endpoint,
+                    s.id AS subscriber, s.status AS sub_status
+             FROM push_carts c LEFT JOIN subscriptions s ON s.endpoint = c.endpoint
+             ${CART_SENT_JOIN}
+             WHERE c.store_id = $1 ${where} ${cursor}
+             ORDER BY c.updated_at DESC LIMIT $2`,
+            params
+        ),
+        db.query(`SELECT automation_settings, abandoned_config FROM stores WHERE store_id = $1`, [storeId]),
+    ]);
+    const cartConfig = normalizeSettings(storeRes.rows[0] || null).abandoned_cart;
+    const now = Date.now();
     return rows.map((c) => ({
         id: c.id,
         created_at: c.created_at,
@@ -176,10 +213,10 @@ async function getCarts(db, storeId, { status = 'all', limit = 25, before = null
         total: c.total,
         currency: c.currency,
         items: (Array.isArray(c.items) ? c.items : []).slice(0, 3).map((i) => ({ title: i.product_title || i.title, image: i.image, quantity: i.quantity })),
-        reminders_sent: c.steps_sent,
+        reminders_sent: c.reminders_sent,
         last_reminder_at: c.last_sent_at,
         clicked_at: c.clicked_at,
-        outcome: cartOutcome(c),
+        ...cartOutcome(c, cartConfig, now),
         subscriber: c.subscriber,
         browser: browserFromEndpoint(c.endpoint),
     }));
@@ -237,4 +274,4 @@ async function getEvents(db, storeId, { type = 'all', limit = 50, before = null 
     }));
 }
 
-module.exports = { getAnalytics, getCarts, getEvents, browserFromEndpoint, EVENT_TYPES, AUTOMATION_NAMES };
+module.exports = { getAnalytics, getCarts, getEvents, browserFromEndpoint, cartOutcome, EVENT_TYPES, AUTOMATION_NAMES };

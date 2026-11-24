@@ -1342,6 +1342,7 @@ module.exports = {
     LIMITS,
     ensureSchema,
     normalizeSettings,
+    CART_WINDOW_MIN,
     validateAutomationConfig,
     renderTemplate,
     formatMoney,
