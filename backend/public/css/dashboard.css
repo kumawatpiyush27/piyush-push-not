@@ -258,3 +258,96 @@ button:focus-visible, .menu-item:focus-visible, [role=button]:focus-visible { ou
 .rd-usage[data-level="warn"] .rd-usage-bar span { background: #f59e0b; }
 .rd-usage[data-level="over"] .rd-usage-bar span { background: #dc2626; }
 .rd-usage[data-level="over"] .rd-usage-foot { color: var(--err); font-weight: 600; }
+
+/* ---------- Campaign preview: Android / Windows / macOS / iPhone (js/campaign-preview.js) ---------- */
+.rp-card { padding: 18px; }
+.rp-head { display: flex; align-items: baseline; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
+.rp-head h3 { margin: 0; font-size: 16px; }
+.rp-sub { font-size: 12px; color: #6b7280; }
+.rp-tabs { display: grid; grid-template-columns: repeat(4, 1fr); gap: 4px; background: #f3f4f6; border-radius: 10px; padding: 4px; margin-bottom: 14px; }
+.rp-tab { border: 0; background: transparent; border-radius: 8px; padding: 7px 4px; font-size: 12px; font-weight: 600; color: #4b5563; cursor: pointer; display: flex; flex-direction: column; align-items: center; gap: 3px; }
+.rp-tab i { font-size: 15px; }
+.rp-tab:hover { color: #111827; }
+.rp-tab.active { background: #fff; color: #111827; box-shadow: 0 1px 3px rgba(0, 0, 0, .12); }
+.rp-tab:focus-visible { outline: 2px solid #2563eb; outline-offset: 1px; }
+.rp-stage { border-radius: 14px; overflow: hidden; }
+.rp-note { margin-top: 12px; font-size: 12px; color: #4b5563; line-height: 1.5; display: flex; gap: 6px; }
+.rp-note i { color: #2563eb; margin-top: 2px; }
+.rp-warn { margin-top: 8px; font-size: 12px; color: #92400e; background: #fffbeb; border: 1px solid #fde68a; border-radius: 8px; padding: 6px 8px; line-height: 1.4; }
+.rp-icon-ph { display: flex; align-items: center; justify-content: center; background: #e5e7eb; color: #6b7280; }
+.rp-sep { opacity: .6; }
+
+/* Android: notification shade */
+.rp-shade { background: linear-gradient(160deg, #1f2937, #0b1220); padding: 14px 10px; }
+.rp-a { background: #fff; border-radius: 18px; padding: 12px 14px; font-family: Roboto, "Segoe UI", system-ui, sans-serif; color: #1f1f1f; }
+.rp-a-top { display: flex; align-items: center; gap: 5px; font-size: 11.5px; color: #5f6368; }
+.rp-a-app { width: 18px; height: 18px; border-radius: 50%; background: #1a73e8; color: #fff; display: inline-flex; align-items: center; justify-content: center; font-size: 10px; flex: none; }
+.rp-a-dom { max-width: 130px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rp-a-chev { margin-left: auto; font-size: 10px; }
+.rp-a-main { display: flex; gap: 10px; margin-top: 8px; }
+.rp-a-text { flex: 1; min-width: 0; }
+.rp-a-title { font-weight: 600; font-size: 14px; line-height: 1.35; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; word-break: break-word; }
+.rp-a-body { font-size: 13px; color: #3c4043; line-height: 1.4; margin-top: 2px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; word-break: break-word; }
+.rp-a-icon { width: 40px; height: 40px; border-radius: 8px; object-fit: cover; flex: 0 0 40px; }
+.rp-a-img { display: block; width: 100%; aspect-ratio: 2 / 1; object-fit: cover; border-radius: 12px; margin-top: 10px; background: #f1f3f4; }
+.rp-a-actions { display: flex; gap: 18px; margin-top: 10px; font-size: 12.5px; font-weight: 600; color: #1a73e8; flex-wrap: wrap; }
+
+/* Windows 11 toast */
+.rp-desk { padding: 18px 12px; display: flex; justify-content: flex-end; }
+.rp-desk-win { background: linear-gradient(135deg, #0b3b8c, #2b6fd6 55%, #7fb2ff); }
+.rp-w { width: 100%; max-width: 330px; background: #2b2b2b; color: #fff; border-radius: 10px; border: 1px solid rgba(255, 255, 255, .08); box-shadow: 0 10px 28px rgba(0, 0, 0, .35); overflow: hidden; font-family: "Segoe UI", system-ui, sans-serif; }
+.rp-w-top { display: flex; align-items: center; gap: 7px; font-size: 11.5px; color: #d1d1d1; padding: 9px 12px; }
+.rp-w-ctl { margin-left: auto; display: flex; gap: 14px; color: #bdbdbd; }
+.rp-w-hero { display: block; width: 100%; aspect-ratio: 2 / 1; object-fit: cover; background: #3a3a3a; }
+.rp-w-main { display: flex; gap: 12px; padding: 12px; }
+.rp-w-icon { width: 44px; height: 44px; border-radius: 6px; object-fit: cover; flex: 0 0 44px; }
+.rp-w-text { flex: 1; min-width: 0; }
+.rp-w-title { font-weight: 600; font-size: 14px; line-height: 1.3; word-break: break-word; }
+.rp-w-body { font-size: 13px; color: #e6e6e6; line-height: 1.4; margin-top: 2px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 3; -webkit-box-orient: vertical; word-break: break-word; }
+.rp-w-dom { font-size: 11.5px; color: #a8a8a8; margin-top: 4px; }
+.rp-w-actions { display: flex; gap: 8px; padding: 0 12px 12px; }
+.rp-w-actions span { flex: 1; text-align: center; background: #3d3d3d; border-radius: 5px; padding: 7px 6px; font-size: 12.5px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+
+/* macOS banner */
+.rp-desk-mac { background: linear-gradient(140deg, #7b4397, #dc2430 60%, #f7971e); }
+.rp-m { width: 100%; max-width: 340px; display: flex; gap: 10px; align-items: flex-start; padding: 11px 12px; border-radius: 16px; background: rgba(246, 246, 246, .9); -webkit-backdrop-filter: blur(20px); backdrop-filter: blur(20px); box-shadow: 0 8px 24px rgba(0, 0, 0, .25); font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", system-ui, sans-serif; color: #1d1d1f; }
+.rp-m-app { width: 34px; height: 34px; border-radius: 8px; background: #fff; color: #1a73e8; display: flex; align-items: center; justify-content: center; font-size: 20px; flex: 0 0 34px; box-shadow: 0 1px 2px rgba(0, 0, 0, .15); }
+.rp-m-text { flex: 1; min-width: 0; }
+.rp-m-row { display: flex; justify-content: space-between; gap: 6px; }
+.rp-m-title { font-weight: 600; font-size: 13px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rp-m-time { font-size: 11px; color: #6e6e73; flex: none; }
+.rp-m-dom { font-size: 11.5px; color: #6e6e73; }
+.rp-m-body { font-size: 12.5px; line-height: 1.35; margin-top: 1px; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; word-break: break-word; }
+.rp-m-opt { display: inline-block; margin-top: 6px; font-size: 11px; padding: 2px 8px; border-radius: 6px; background: rgba(0, 0, 0, .06); color: #3a3a3c; }
+.rp-m-thumb { width: 38px; height: 38px; border-radius: 6px; object-fit: cover; flex: 0 0 38px; }
+
+/* iPhone lock screen */
+.rp-phone { background: linear-gradient(170deg, #4facfe, #3b5bdb 45%, #1e1b4b); padding: 16px 12px 22px; text-align: center; color: #fff; font-family: -apple-system, BlinkMacSystemFont, "Helvetica Neue", system-ui, sans-serif; }
+.rp-i-clock { font-size: 44px; font-weight: 600; line-height: 1.05; letter-spacing: -1px; }
+.rp-i-date { font-size: 13px; opacity: .9; }
+.rp-i { margin-top: 14px; display: flex; gap: 10px; align-items: flex-start; text-align: left; padding: 10px 12px; border-radius: 18px; background: rgba(255, 255, 255, .75); -webkit-backdrop-filter: blur(18px); backdrop-filter: blur(18px); color: #111; }
+.rp-i-icon { width: 36px; height: 36px; border-radius: 9px; object-fit: cover; flex: 0 0 36px; }
+.rp-i-text { flex: 1; min-width: 0; }
+.rp-i-row { display: flex; justify-content: space-between; font-size: 12px; color: #3c3c43; }
+.rp-i-app { font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.rp-i-time { flex: none; margin-left: 6px; opacity: .8; }
+.rp-i-title { font-weight: 600; font-size: 13.5px; margin-top: 1px; word-break: break-word; }
+.rp-i-body { font-size: 13px; line-height: 1.35; overflow: hidden; display: -webkit-box; -webkit-line-clamp: 4; -webkit-box-orient: vertical; word-break: break-word; }
+
+/* ---------- Campaign scheduling + history (js/campaigns.js) ---------- */
+#sel-later { cursor: pointer; }
+.rc-hint { font-size: 12px; color: #6b7280; margin-top: 6px; }
+.rc-error { margin-top: 12px; padding: 9px 12px; border-radius: 8px; background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; font-size: 13px; }
+.rc-badge { display: inline-block; font-size: 12px; font-weight: 600; padding: 2px 9px; border-radius: 999px; }
+.rc-grey { background: #f1f2f3; color: #4b5563; }
+.rc-blue { background: #dbeafe; color: #1e40af; }
+.rc-amber { background: #fff4e5; color: #b45309; }
+.rc-red { background: #fee2e2; color: #991b1b; }
+.rc-row td { padding: 10px; border-bottom: 1px solid #eee; font-size: 13px; vertical-align: middle; }
+.rc-title { font-weight: 600; }
+.rc-msg { color: #555; max-width: 260px; }
+.rc-when { color: #b45309; font-weight: 600; white-space: nowrap; }
+.rc-count { background: #e4e5e7; padding: 2px 8px; border-radius: 10px; font-size: 12px; }
+.rc-cancel { margin-left: 6px; border: 1px solid #fecaca; background: #fff; color: #b91c1c; border-radius: 6px; padding: 2px 8px; font-size: 12px; font-weight: 600; cursor: pointer; }
+.rc-cancel:hover { background: #fef2f2; }
+.rc-cancel:disabled { opacity: .6; cursor: default; }

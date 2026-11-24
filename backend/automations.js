@@ -1023,7 +1023,17 @@ function appendCampaignUtm(url, campaignId) {
     return withParams(url, { utm_source: 'push-retner', utm_medium: 'push', utm_campaign: `push_camp_${campaignId}` });
 }
 
-async function sendCampaign(ctx, store, camp, { btn1Text, btn1Url, btn2Text, btn2Url } = {}) {
+// Buttons come from the caller or, for scheduled campaigns, from the
+// campaign row (campaigns.buttons), so they are not lost while waiting.
+function campaignButtons(camp, given) {
+    if (given && (given.btn1Text || given.btn2Text)) return given;
+    let b = camp && camp.buttons;
+    if (typeof b === 'string') { try { b = JSON.parse(b); } catch { b = null; } }
+    return b && typeof b === 'object' ? b : {};
+}
+
+async function sendCampaign(ctx, store, camp, buttons) {
+    const { btn1Text, btn1Url, btn2Text, btn2Url } = campaignButtons(camp, buttons);
     const subs = await activeSubscriptions(ctx.db, camp.store_id);
     const mainUrl = campaignClickUrl(camp.id, appendCampaignUtm(camp.url, camp.id) || `https://${camp.store_id}.myshopify.com/`);
     const actions = [];
@@ -1068,6 +1078,13 @@ async function runScheduledCampaigns(ctx, summary, onlyStore) {
         params
     );
     summary.missedCampaigns = missed.rowCount;
+    // A flash sale whose offer has already ended is not sent at all.
+    const ended = await ctx.db.query(
+        `UPDATE campaigns SET status = 'expired'
+         WHERE status = 'scheduled' AND expiry_at IS NOT NULL AND expiry_at <= NOW() ${onlyStore ? 'AND store_id = $1' : ''}`,
+        params
+    );
+    summary.expiredCampaigns = ended.rowCount;
     const { rows } = await ctx.db.query(
         `UPDATE campaigns SET status = 'sending'
          WHERE id IN (
@@ -1107,7 +1124,7 @@ async function runAutomations({ db, webPush, now = new Date(), onlyStore = null,
     await ensureSchema(db);
     const ctx = { db, webPush, now, budget: makeBudget(budget), perStoreLimit, fetch: fetchImpl };
     const summary = {
-        scheduledCampaigns: 0, campaignPushes: 0, abandoned: 0, browse: 0, winback: 0, thankYou: 0,
+        scheduledCampaigns: 0, expiredCampaigns: 0, campaignPushes: 0, abandoned: 0, browse: 0, winback: 0, thankYou: 0,
         productChecks: 0, productCheckErrors: 0, priceDrops: 0, restocks: 0, priceDropPushes: 0, restockPushes: 0,
         expiredCarts: 0, stores: 0, errors: [],
     };
@@ -1373,6 +1390,7 @@ module.exports = {
     loadStore,
     activeSubscriptions,
     vapidOptions,
+    campaignButtons,
     WELCOME_DEFAULT,
     vapidKeyPairs,
     primaryVapidPublicKey,

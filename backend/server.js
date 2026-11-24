@@ -68,6 +68,7 @@ const initCampaignTable = async () => {
         try {
             await getPool().query('ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS clicks INTEGER DEFAULT 0');
             await getPool().query('ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS revenue DECIMAL(10,2) DEFAULT 0.00');
+            await getPool().query('ALTER TABLE campaigns ADD COLUMN IF NOT EXISTS buttons JSONB');
             console.log('✅ Campaigns table migrated');
         } catch (e) { console.log('Migration note:', e.message); }
 
@@ -561,10 +562,12 @@ app.get('/store-admin', async (req, res) => {
 
     </style>
     <link rel="stylesheet" href="/css/automations.css?v=3">
-    <link rel="stylesheet" href="/css/dashboard.css?v=3">
+    <link rel="stylesheet" href="/css/dashboard.css?v=4">
     <script src="/js/automations.js?v=3" defer></script>
     <script src="/js/media.js?v=1" defer></script>
     <script src="/js/analytics.js?v=2" defer></script>
+    <script src="/js/campaign-preview.js?v=1" defer></script>
+    <script src="/js/campaigns.js?v=1" defer></script>
 </head>
 <body>
 
@@ -842,21 +845,23 @@ app.get('/store-admin', async (req, res) => {
                                         <div class="selection-title">Send Now</div>
                                         <div class="selection-desc">Campaign will be sent immediately.</div>
                                     </div>
-                                    <div class="selection-card" id="sel-later" style="opacity: 0.6; cursor: not-allowed; border: 1px solid #eee;">
-                                        <div class="selection-title">Schedule for Later (Coming Soon 🚀)</div>
-                                        <div class="selection-desc">Pick a future date and time.</div>
+                                    <div class="selection-card" id="sel-later" onclick="toggleSchedule('later')">
+                                        <div class="selection-title">Schedule for later</div>
+                                        <div class="selection-desc">Pick a date and time. It goes out within 5 minutes of that time.</div>
                                     </div>
                                 </div>
                                 <div id="scheduleTimeWrapper" class="hidden" style="margin-top: 15px;">
                                     <label>Send Date & Time</label>
                                     <input type="datetime-local" id="scheduleTime" class="form-control">
+                                    <div class="rc-hint" id="scheduleHint"></div>
                                 </div>
+                                <div class="rc-error hidden" id="step3Error" role="alert"></div>
                             </div>
 
                              <!-- FLASH SALE ONLY -->
                              <div class="wizard-card hidden" id="expiryCard" style="border: 1px solid #fcd34d; background: #fffbeb;">
                                 <h3 style="color: #b45309; display: flex; align-items: center; gap: 8px;"><i class="fas fa-bolt"></i> Flash Sale Expiry</h3>
-                                <p style="font-size: 13px; color: #92400e; margin-bottom: 10px;">Set an expiry time for this limited offer (TTL).</p>
+                                <p style="font-size: 13px; color: #92400e; margin-bottom: 10px;">Optional: when the offer ends. Shoppers who come online after this do not get the notification, and a scheduled flash sale is not sent once the offer has ended.</p>
                                 <label style="color: #92400e;">Offer Expires At</label>
                                 <input type="datetime-local" id="expiryTime" class="form-control">
                             </div>
@@ -871,6 +876,7 @@ app.get('/store-admin', async (req, res) => {
                                     <tr><td style="color:#666; padding:8px 0;">Message:</td><td style="font-weight:500;" id="revMsg">-</td></tr>
                                     <tr><td style="color:#666; padding:8px 0;">Audience:</td><td style="font-weight:500;">All Subscribers</td></tr>
                                     <tr><td style="color:#666; padding:8px 0;">Schedule:</td><td style="font-weight:500;" id="revSchedule">Immediately</td></tr>
+                                    <tr id="revExpiryRow" class="hidden"><td style="color:#666; padding:8px 0;">Offer ends:</td><td style="font-weight:500;" id="revExpiry">-</td></tr>
                                 </table>
                             </div>
                         </div>
@@ -888,21 +894,8 @@ app.get('/store-admin', async (req, res) => {
 
                     <!-- PREVIEW IS STICKY -->
                     <div>
-                        <div class="card" style="position: sticky; top: 20px;">
-                            <h3>Preview (Android/Windows)</h3>
-                            <div class="preview-box">
-                                <div style="display: flex; gap: 10px; margin-bottom: 10px;">
-                                    <div style="width: 40px; height: 40px; background: #ddd; border-radius: 50%; overflow: hidden; display: flex; align-items: center; justify-content: center;">
-                                        <img id="prevIcon" src="" style="width: 100%; height: 100%; object-fit: cover; display: none;">
-                                        <i id="prevIconPlaceholder" class="fas fa-bell" style="color: #999;"></i>
-                                    </div>
-                                    <div>
-                                        <div style="font-weight: bold; font-size: 14px;" id="prevTitle">Campaign Title</div>
-                                        <div style="font-size: 12px; color: #666;" id="prevMsg">Message body goes here...</div>
-                                    </div>
-                                </div>
-                                <img id="prevImg" src="" style="display: none;" class="preview-hero">
-                            </div>
+                        <div class="card rp-card" style="position: sticky; top: 20px;">
+                            <div id="rpPreview"></div>
                         </div>
                     </div>
                 </div>
@@ -1209,32 +1202,7 @@ app.get('/store-admin', async (req, res) => {
 
         // PREVIEW LOGIC
         function updatePreview() {
-            const title = document.getElementById('campTitle').value || 'Campaign Title';
-            const msg = document.getElementById('campMsg').value || 'Message body...';
-            const img = document.getElementById('campImg').value;
-            const icon = document.getElementById('campIcon').value;
-            
-            document.getElementById('prevTitle').innerText = title;
-            document.getElementById('prevMsg').innerText = msg;
-            
-            const imgEl = document.getElementById('prevImg');
-            if(img) {
-                imgEl.src = img;
-                imgEl.style.display = 'block';
-            } else {
-                imgEl.style.display = 'none';
-            }
-
-            const iconEl = document.getElementById('prevIcon');
-            const iconPlaceholder = document.getElementById('prevIconPlaceholder');
-            if(icon) {
-                iconEl.src = icon;
-                iconEl.style.display = 'block';
-                iconPlaceholder.style.display = 'none';
-            } else {
-                iconEl.style.display = 'none';
-                iconPlaceholder.style.display = 'block';
-            }
+            if (window.RetnerPreview) window.RetnerPreview.render();
         }
 
         // API ACTIONS
@@ -1353,7 +1321,7 @@ app.get('/store-admin', async (req, res) => {
             if (recent.length) {
                 tbodyRecent.innerHTML = recent.map((camp) => {
                     const date = camp.created_at ? new Date(camp.created_at).toLocaleDateString('en-IN', { day: 'numeric', month: 'short', year: 'numeric' }) : '—';
-                    const badge = camp.status === 'scheduled' ? '<span class="rd-badge rd-badge-amber">Scheduled</span>'
+                    const badge = (camp.status && camp.status !== 'sent' && window.RetnerCampaigns) ? RetnerCampaigns.statusBadge(camp)
                         : '<span class="rd-badge rd-badge-blue">' + fmtNum(camp.sent_count) + ' sent</span>';
                     return '<tr><td>' + escHtml(date) + '</td><td class="rd-strong">' + escHtml(camp.title) + '</td><td>' + badge + '</td></tr>';
                 }).join('');
@@ -1402,7 +1370,7 @@ app.get('/store-admin', async (req, res) => {
             window.allCampaigns = data.campaigns;
 
             data.campaigns.forEach(camp => {
-                if(camp.status !== 'scheduled') {
+                if(camp.status === 'sent' || !camp.status) {
                     totalSent++;
                     totalImpressions += (camp.sent_count || 0);
                     totalClicks += (camp.clicks || 0);
@@ -1454,11 +1422,11 @@ app.get('/store-admin', async (req, res) => {
              if(!window.allCampaigns) window.allCampaigns = [];
              
              if(type === 'all') filtered = window.allCampaigns;
-             else if(type === 'sent') filtered = window.allCampaigns.filter(c => c.status !== 'scheduled');
+             else if(type === 'sent') filtered = window.allCampaigns.filter(c => c.status === 'sent' || !c.status);
              else if(type === 'scheduled') filtered = window.allCampaigns.filter(c => c.status === 'scheduled');
-             
+
              // Update Counts
-             const sentCount = window.allCampaigns.filter(c => c.status !== 'scheduled').length;
+             const sentCount = window.allCampaigns.filter(c => c.status === 'sent' || !c.status).length;
              const schCount = window.allCampaigns.filter(c => c.status === 'scheduled').length;
              if(document.getElementById('count-sent')) document.getElementById('count-sent').innerText = sentCount;
              if(document.getElementById('count-scheduled')) document.getElementById('count-scheduled').innerText = schCount;
@@ -1467,24 +1435,9 @@ app.get('/store-admin', async (req, res) => {
                   tbody.innerHTML = '<tr><td colspan="6" style="padding: 20px; text-align: center; color: #999;">No campaigns found.</td></tr>';
                   return;
              }
-
-             filtered.forEach(camp => {
-                const date = new Date(camp.created_at).toLocaleDateString() + ' ' + new Date(camp.created_at).toLocaleTimeString();
-                let statusBadge = '<span style="background: #e4e5e7; padding: 2px 8px; border-radius: 10px;">Sent</span>';
-                if(camp.status === 'scheduled') statusBadge = '<span style="background: #fff4e5; color: #b45309; padding: 2px 8px; border-radius: 10px; font-weight:600;">⏳ Scheduled</span>';
-                
-                let typeStr = 'Regular';
-                if(camp.type === 'flash') typeStr = '⚡ Flash Sale';
-                
-                tbody.innerHTML += '<tr style="border-bottom: 1px solid #eee;">' +
-                    '<td style="padding: 10px; color: #666; font-size: 13px;">' + date + '</td>' +
-                    '<td style="padding: 10px; font-weight: 500; font-size: 13px;">' + typeStr + '</td>' +
-                    '<td style="padding: 10px; font-weight: 500;">' + camp.title + '</td>' +
-                    '<td style="padding: 10px; color: #555;">' + camp.message.substring(0, 50) + '...</td>' +
-                    '<td style="padding: 10px;">' + statusBadge + '</td>' +
-                    '<td style="padding: 10px;"><span style="background: #e4e5e7; padding: 2px 8px; border-radius: 10px; font-size: 12px;">' + camp.sent_count + '</span></td>' +
-                '</tr>';
-             });
+             tbody.innerHTML = filtered.map((camp) => window.RetnerCampaigns
+                 ? RetnerCampaigns.historyRow(camp)
+                 : '<tr><td colspan="6">' + escHtml(camp.title) + '</td></tr>').join('');
         }
 
         async function loadSubscribers() {
@@ -1519,7 +1472,7 @@ app.get('/store-admin', async (req, res) => {
         let campaignType = 'regular'; // Default
 
         function selectCampaignType(el, type) {
-            document.querySelectorAll('.selector-card, .selection-card').forEach(c => c.classList.remove('selected'));
+            document.querySelectorAll('#step-1 .selection-card').forEach(c => c.classList.remove('selected'));
             el.classList.add('selected');
             campaignType = type;
         }
@@ -1533,6 +1486,7 @@ app.get('/store-admin', async (req, res) => {
              
              if(mode === 'later') document.getElementById('scheduleTimeWrapper').classList.remove('hidden');
              else document.getElementById('scheduleTimeWrapper').classList.add('hidden');
+             if (window.RetnerCampaigns) RetnerCampaigns.onScheduleMode(mode);
         }
 
         function changeStep(dir) {
@@ -1556,7 +1510,11 @@ app.get('/store-admin', async (req, res) => {
                     return;
                 }
             }
+            if(currentStep === 3 && dir === 1 && window.RetnerCampaigns) {
+                if (RetnerCampaigns.validateStep3(scheduleMode, campaignType)) return;
+            }
             if(newStep === 3) {
+                if (window.RetnerCampaigns) setTimeout(() => RetnerCampaigns.onScheduleMode(scheduleMode), 0);
                 fetch('/my-store/stats?storeId=' + store.id)
                     .then(r => r.json())
                     .then(d => { document.getElementById('estReach').innerText = d.subscribers || 0; });
@@ -1590,6 +1548,7 @@ app.get('/store-admin', async (req, res) => {
             if(currentStep === 4) {
                 nextBtn.classList.add('hidden');
                 sendBtn.classList.remove('hidden');
+                if (window.RetnerCampaigns) RetnerCampaigns.updateSendLabel(scheduleMode);
             } else {
                 nextBtn.classList.remove('hidden');
                 sendBtn.classList.add('hidden');
@@ -1600,90 +1559,75 @@ app.get('/store-admin', async (req, res) => {
             document.getElementById('revTitle').innerText = document.getElementById('campTitle').value;
             document.getElementById('revMsg').innerText = document.getElementById('campMsg').value;
             
-            const timeVal = document.getElementById('scheduleTime').value;
-            let scheduleText = 'Immediately';
-            if(scheduleMode === 'later' && timeVal) {
-                scheduleText = new Date(timeVal).toLocaleString();
-            }
             const revSch = document.getElementById('revSchedule');
-            if(revSch) revSch.innerText = scheduleText;
+            if(revSch) revSch.innerText = window.RetnerCampaigns ? RetnerCampaigns.describeSchedule(scheduleMode) : 'Immediately';
+            const expText = window.RetnerCampaigns ? RetnerCampaigns.describeExpiry(campaignType) : '';
+            const expRow = document.getElementById('revExpiryRow');
+            if(expRow) expRow.classList.toggle('hidden', !expText);
+            if(document.getElementById('revExpiry')) document.getElementById('revExpiry').innerText = expText;
         }
 
         async function sendBroadcastFinal() {
             const btn = document.getElementById('btnSend');
-            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Sending...';
+            if (window.RetnerCampaigns && RetnerCampaigns.validateStep3(scheduleMode, campaignType)) return;
             btn.disabled = true;
-
-            await sendBroadcast(); // Reuse existing logic
-
-            btn.innerHTML = '🚀 Send Campaign';
-            btn.disabled = false;
+            btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> ' + (scheduleMode === 'later' ? 'Scheduling...' : 'Sending...');
+            try {
+                await sendBroadcast();
+            } finally {
+                btn.disabled = false;
+                if (window.RetnerCampaigns) RetnerCampaigns.updateSendLabel(scheduleMode);
+            }
         }
 
         async function sendBroadcast() {
-            const title = document.getElementById('campTitle').value;
-            const message = document.getElementById('campMsg').value;
-            const image = document.getElementById('campImg').value;
-            const rawUrl = document.getElementById('campUrl').value;
-            
-            // UTM Tracking Helper
-            const appendUTM = (url, campId) => {
-                if(!url) return url;
-                const sep = url.indexOf('?') !== -1 ? '&' : '?';
-                const campaign = encodeURIComponent(title.replace(/\s+/g, '-').toLowerCase());
-                return url + sep + 'utm_source=push-retner&utm_medium=push&utm_campaign=push_camp_' + campId;
-            };
-
-            // URL will be updated after campaign ID is known
-            let urlForPayload = rawUrl; 
-            const icon = document.getElementById('campIcon').value;
-            const btn1Text = document.getElementById('btn1Txt').value;
-            const btn1UrlRaw = document.getElementById('btn1Link').value;
-            let btn1UrlForPayload = btn1UrlRaw || rawUrl;
-
-            const btn2Text = document.getElementById('btn2Txt').value;
-            const btn2UrlRaw = document.getElementById('btn2Link').value;
-            let btn2UrlForPayload = btn2UrlRaw || rawUrl;
-
-            let scheduledAt = null;
-            if(scheduleMode === 'later') {
-                 const val = document.getElementById('scheduleTime').value;
-                 if(val) scheduledAt = new Date(val).toISOString();
+            const val = (id) => ((document.getElementById(id) || {}).value || '').trim();
+            const scheduledAt = scheduleMode === 'later' && val('scheduleTime') ? new Date(val('scheduleTime')).toISOString() : null;
+            const expiryAt = campaignType === 'flash' && val('expiryTime') ? new Date(val('expiryTime')).toISOString() : null;
+            let data;
+            try {
+                const res = await fetch('/my-store/broadcast', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        title: val('campTitle'), message: val('campMsg'), url: val('campUrl'),
+                        image: val('campImg'), icon: val('campIcon'), type: campaignType,
+                        schedule: scheduleMode, scheduledAt: scheduledAt, expiryAt: expiryAt,
+                        btn1Text: val('btn1Txt'), btn1UrlRaw: val('btn1Link'), btn2Text: val('btn2Txt'), btn2UrlRaw: val('btn2Link')
+                    })
+                });
+                data = await res.json().catch(() => ({ success: false, error: 'Server error (' + res.status + ')' }));
+            } catch (e) {
+                data = { success: false, error: 'Could not reach the server. Check your connection and try again.' };
             }
-            let expiryAt = null;
-            if(campaignType === 'flash') {
-                 const val = document.getElementById('expiryTime').value;
-                 if(val) expiryAt = new Date(val).toISOString();
+            if (!data.success) {
+                alert('Could not ' + (scheduleMode === 'later' ? 'schedule' : 'send') + ' the campaign: ' + (data.error || 'unknown error'));
+                return;
             }
+            alert(window.RetnerCampaigns ? RetnerCampaigns.resultMessage(data) : 'Done.');
+            const wasScheduled = data.status === 'scheduled';
+            resetCampaignForm();
+            switchView(wasScheduled ? 'history' : 'dashboard');
+        }
 
-            const actions = [];
-            // Actions will be populated after campId is known
-
-            // Original fetch call logic
-            const res = await fetch('/my-store/broadcast', {
-                method: 'POST',
-                headers: {'Content-Type': 'application/json'},
-                body: JSON.stringify({ storeId: store.id, title, message, url: rawUrl, image, icon, actions, type: campaignType, scheduledAt, expiryAt, btn1Text, btn1UrlRaw, btn2Text, btn2UrlRaw })
+        // Clears the wizard after a send so the next campaign starts empty.
+        function resetCampaignForm() {
+            ['campTitle', 'campMsg', 'campUrl', 'btn1Txt', 'btn1Link', 'btn2Txt', 'btn2Link', 'scheduleTime', 'expiryTime'].forEach((id) => {
+                const el = document.getElementById(id);
+                if (el) el.value = '';
             });
-            const data = await res.json();
-            
-            if(data.success) {
-                if(data.status === 'scheduled') {
-                    alert('📅 Campaign Scheduled Successfully!');
-                } else {
-                    if(data.sent === 0 && data.lastError) {
-                        alert('⚠️ Sent to 0. Reason: ' + data.lastError);
-                    } else {
-                        alert('✅ Sent to ' + data.sent + ' subscribers!');
-                    }
-                }
-                switchView('dashboard'); // Go back to dash
-                // Reset Wizard
-                currentStep = 1;
-                // Ideally reset inputs here too
-            } else {
-                alert('❌ Failed: ' + data.error);
-            }
+            ['campImg', 'campIcon'].forEach((id) => {
+                const el = document.getElementById(id);
+                if (!el) return;
+                el.value = '';
+                if (el.__rm) el.__rm.setValue('');
+            });
+            const firstType = document.querySelector('#step-1 .selection-card');
+            if (firstType) selectCampaignType(firstType, 'regular');
+            toggleSchedule('now');
+            if (window.RetnerCampaigns) RetnerCampaigns.showError('');
+            updatePreview();
+            resetWizard();
         }
 
         function logout() {
@@ -1907,40 +1851,96 @@ app.post('/webhooks/shopify/checkouts', verifyShopifyWebhook, async (req, res) =
     res.status(200).send('OK');
 });
 
-// Broadcast API
+// Links shoppers open must be absolute web addresses: "mystore.com/x" becomes
+// "https://mystore.com/x". Returns null when empty, undefined when invalid.
+function normalizeLink(value) {
+    if (value === undefined || value === null || String(value).trim() === '') return null;
+    let v = String(value).trim();
+    if (!/^[a-z][a-z0-9+.-]*:/i.test(v)) v = 'https://' + v.replace(/^[/]+/, '');
+    try {
+        const u = new URL(v);
+        if ((u.protocol !== 'https:' && u.protocol !== 'http:') || !u.hostname.includes('.')) return undefined;
+        return u.toString().slice(0, 1000);
+    } catch (e) { return undefined; }
+}
+
+const SCHEDULE_MIN_MS = 4 * 60e3;          // UI asks for 5 minutes; allow clock skew
+const SCHEDULE_MAX_MS = 60 * 24 * 3600e3;  // up to 60 days ahead
+const EXPIRY_MIN_MS = 5 * 60e3;            // offer must last at least 5 minutes after sending
+
+// Broadcast API: send now, or schedule (the cron sends it within 5 minutes of
+// scheduled_at). Times are stored as UTC.
 app.post('/my-store/broadcast', async (req, res) => {
     const storeId = req.storeId;
-    const { title, message, url, image, icon, type, scheduledAt, expiryAt, btn1Text, btn1UrlRaw, btn2Text, btn2UrlRaw } = req.body || {};
+    const { title, message, url, image, icon, type, schedule, scheduledAt, expiryAt, btn1Text, btn1UrlRaw, btn2Text, btn2UrlRaw } = req.body || {};
+    const bad = (error) => res.status(400).json({ success: false, error });
     try {
-        if (!title || !message) return res.status(400).json({ success: false, error: 'Title and message are required.' });
-        const db = getPool();
+        if (!title || !message) return bad('Title and message are required.');
+        const now = Date.now();
 
-        // Insert the campaign first: its id is used for click/revenue tracking.
-        const insertResult = await db.query(
-            `INSERT INTO campaigns (store_id, title, message, url, image, icon, status, type, scheduled_at, expiry_at, sent_count, created_at)
-             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, 0, NOW()) RETURNING *`,
-            [storeId, String(title).slice(0, 120), String(message).slice(0, 500), url || null,
-             (image && String(image).startsWith('https://') && String(image).length < 500) ? image : null,
-             (icon && String(icon).startsWith('https://') && String(icon).length < 500) ? icon : null,
-             scheduledAt ? 'scheduled' : 'sending', type || 'regular', scheduledAt || null, expiryAt || null]
-        );
-        const camp = insertResult.rows[0];
-
-        if (scheduledAt && new Date(scheduledAt) > new Date()) {
-            return res.json({ success: true, sent: 0, status: 'scheduled' });
+        let sendAt = null;
+        if (schedule === 'later' || scheduledAt) {
+            const t = Date.parse(scheduledAt);
+            if (!Number.isFinite(t)) return bad('Pick the date and time to send this campaign.');
+            if (t < now + SCHEDULE_MIN_MS) return bad('Pick a time at least 5 minutes from now.');
+            if (t > now + SCHEDULE_MAX_MS) return bad('You can schedule up to 60 days ahead.');
+            sendAt = new Date(t);
+        }
+        let endsAt = null;
+        if (expiryAt) {
+            const t = Date.parse(expiryAt);
+            if (!Number.isFinite(t)) return bad('The offer end time is not valid.');
+            if (t < (sendAt ? sendAt.getTime() : now) + EXPIRY_MIN_MS) return bad('The offer must end at least 5 minutes after the campaign is sent.');
+            endsAt = new Date(t);
         }
 
-        const store = (await automations.loadStore(db, storeId)) || { store_id: storeId };
-        const result = await automations.sendCampaign(
-            { db, webPush },
-            store,
-            camp,
-            { btn1Text, btn1Url: btn1UrlRaw, btn2Text, btn2Url: btn2UrlRaw }
+        const link = normalizeLink(url);
+        const b1 = normalizeLink(btn1UrlRaw);
+        const b2 = normalizeLink(btn2UrlRaw);
+        if (link === undefined || b1 === undefined || b2 === undefined) return bad('Links must be web addresses like https://yourstore.com/products/...');
+        const clampText = (v) => (typeof v === 'string' ? v.trim().slice(0, 40) : '');
+        const buttons = (clampText(btn1Text) || clampText(btn2Text))
+            ? { btn1Text: clampText(btn1Text), btn1Url: b1 || null, btn2Text: clampText(btn2Text), btn2Url: b2 || null }
+            : null;
+
+        const db = getPool();
+        // Insert the campaign first: its id is used for click/revenue tracking.
+        const insertResult = await db.query(
+            `INSERT INTO campaigns (store_id, title, message, url, image, icon, status, type, scheduled_at, expiry_at, buttons, sent_count, created_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, 0, NOW()) RETURNING *`,
+            [storeId, String(title).slice(0, 120), String(message).slice(0, 500), link,
+             (image && String(image).startsWith('https://') && String(image).length < 500) ? image : null,
+             (icon && String(icon).startsWith('https://') && String(icon).length < 500) ? icon : null,
+             sendAt ? 'scheduled' : 'sending', type === 'flash' ? 'flash' : 'regular',
+             sendAt ? sendAt.toISOString() : null, endsAt ? endsAt.toISOString() : null,
+             buttons ? JSON.stringify(buttons) : null]
         );
-        res.json({ success: true, sent: result.sent, total: result.total, status: 'sent', lastError: result.lastError });
+        const camp = insertResult.rows[0];
+        if (sendAt) return res.json({ success: true, sent: 0, status: 'scheduled', id: camp.id, scheduled_at: sendAt.toISOString() });
+
+        const store = (await automations.loadStore(db, storeId)) || { store_id: storeId };
+        const result = await automations.sendCampaign({ db, webPush }, store, camp);
+        res.json({ success: true, id: camp.id, sent: result.sent, total: result.total, status: 'sent', lastError: result.lastError });
     } catch (e) {
         console.error('Broadcast error:', e.message);
         res.status(500).json({ success: false, error: 'Could not send the campaign. Please try again.' });
+    }
+});
+
+// Cancel a scheduled campaign before it goes out (the row is kept).
+app.post('/my-store/campaigns/:id/cancel', async (req, res) => {
+    const id = Number(req.params.id);
+    if (!Number.isInteger(id) || id <= 0) return res.status(400).json({ success: false, error: 'Invalid campaign.' });
+    try {
+        const r = await getPool().query(
+            `UPDATE campaigns SET status = 'cancelled' WHERE id = $1 AND store_id = $2 AND status = 'scheduled' RETURNING id`,
+            [id, req.storeId]
+        );
+        if (!r.rowCount) return res.status(409).json({ success: false, error: 'This campaign is no longer scheduled. It may have been sent already.' });
+        res.json({ success: true });
+    } catch (e) {
+        console.error('Cancel campaign error:', e.message);
+        res.status(500).json({ success: false, error: 'Could not cancel. Please try again.' });
     }
 });
 
