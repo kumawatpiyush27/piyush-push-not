@@ -76,8 +76,8 @@
   }
 
   // ------------------------------------------------------------ router
-  var VIEWS = ['home', 'campaigns', 'creator', 'subscribers', 'analytics', 'automations', 'settings'];
-  var ALIAS = { dashboard: 'home', campaign: 'creator', history: 'campaigns', 'automation-editor': 'automations' };
+  var VIEWS = ['home', 'campaigns', 'creator', 'subscribers', 'segments', 'analytics', 'automations', 'plan', 'settings'];
+  var ALIAS = { dashboard: 'home', campaign: 'creator', history: 'campaigns', 'automation-editor': 'automations', audiences: 'segments', upgrade: 'plan', billing: 'plan', usage: 'plan' };
   var current = null;
   var loaders = {};
   function showView(name, opts) {
@@ -145,7 +145,10 @@
         greeting(); $('avatar').textContent = n.charAt(0).toUpperCase(); $('avatar').title = n;
       }
     });
-    var q = new URLSearchParams(window.location.search).get('view');
+    var params = new URLSearchParams(window.location.search);
+    var q = params.get('view');
+    // ?segment=key (from the Shopify app's Segments page) preselects the audience.
+    if (params.get('segment')) pendingSegment = params.get('segment');
     var h = window.location.hash.replace('#', '');
     showView(q || h || 'home', { silent: !!h });
   }
@@ -182,7 +185,7 @@
       var u = rs[2].ok ? (rs[2].data.usage || rs[2].data) : null;
       if (u && u.limit !== undefined) {
         var pct = Math.min(100, Number(u.percent) || 0);
-        $('planName').textContent = (Number(u.limit) >= 50000 ? 'Growth plan' : 'Starter plan');
+        $('planName').textContent = (u.plan && u.plan.name ? u.plan.name : (Number(u.limit) >= 50000 ? 'Pro' : Number(u.limit) >= 10000 ? 'Growth' : 'Starter')) + ' plan';
         $('planText').textContent = num(u.used) + ' of ' + num(u.limit) + ' notifications used this month';
         $('planBar').className = 'bar' + (pct >= 100 ? ' over' : pct >= 80 ? ' warn' : '');
         $('planBar').firstElementChild.style.width = pct + '%';
@@ -229,6 +232,7 @@
     $('chartMetric').querySelectorAll('button').forEach(function (x) { x.classList.toggle('active', x === b); });
     drawHomeChart();
   });
+  $('planBtn').addEventListener('click', function () { showView('plan'); });
 
   // ------------------------------------------------------------ campaigns (history)
   var histFilter = 'all';
@@ -320,8 +324,11 @@
     $('testBtn').addEventListener('click', sendTest);
     counters();
   }
-  var segments = [], segment = 'all';
+  // pendingSegment: audience chosen on the Segments page (or ?segment=) that the
+  // creator should preselect the next time it opens.
+  var segments = [], segment = 'all', pendingSegment = null;
   loaders.creator = function () {
+    if (pendingSegment) { segment = pendingSegment; pendingSegment = null; }
     loadSegments();
     if (window.RetnerCampaigns) window.RetnerCampaigns.onScheduleMode(scheduleMode);
     preview();
@@ -335,11 +342,11 @@
     });
   }
   var SEG_ICONS = { all: 'fa-users', active_7d: 'fa-bolt', active_30d: 'fa-calendar', new_7d: 'fa-user-plus', inactive_30d: 'fa-moon', cart_30d: 'fa-cart-shopping', buyers_30d: 'fa-bag-shopping', chrome: 'fab fa-chrome', safari: 'fab fa-safari', firefox: 'fab fa-firefox-browser', edge: 'fab fa-edge' };
+  function segIcon(key) { var ic = SEG_ICONS[key] || 'fa-users'; return ic.indexOf('fab') === 0 ? ic : 'fas ' + ic; }
   function renderSegments() {
     $('segGrid').innerHTML = segments.map(function (s) {
-      var ic = SEG_ICONS[s.key] || 'fa-users';
       return '<div class="seg-card' + (s.key === segment ? ' active' : '') + (s.count ? '' : ' empty') + '" data-seg="' + esc(s.key) + '" role="radio" aria-checked="' + (s.key === segment) + '" tabindex="0">' +
-        '<span class="ic"><i class="' + (ic.indexOf('fab') === 0 ? ic : 'fas ' + ic) + '"></i></span><div><b>' + esc(s.name) + '</b>' + (s.desc ? '<span>' + esc(s.desc) + '</span>' : '') + '</div><em>' + num(s.count) + '</em></div>';
+        '<span class="ic"><i class="' + segIcon(s.key) + '"></i></span><div><b>' + esc(s.name) + '</b>' + (s.desc ? '<span>' + esc(s.desc) + '</span>' : '') + '</div><em>' + num(s.count) + '</em></div>';
     }).join('');
     updateReach();
   }
@@ -518,6 +525,112 @@
     subDays = Number(b.getAttribute('data-days'));
     $('subRange').querySelectorAll('button').forEach(function (x) { x.classList.toggle('active', x === b); });
     loadSubscribers();
+  });
+
+  // ------------------------------------------------------------ segments page
+  var BROWSER_SEGS = { chrome: 1, safari: 1, firefox: 1, edge: 1 };
+  loaders.segments = function () { loadSegmentsPage(); };
+  function loadSegmentsPage() {
+    api('/my-store/segments').then(function (r) {
+      document.querySelectorAll('#view-segments .skel').forEach(function (el) { el.classList.remove('skel'); });
+      if (!r.ok || !r.data.success) {
+        $('segBehaviour').innerHTML = '<div class="muted">Could not load segments. Refresh to try again.</div>'; $('segBrowser').innerHTML = '';
+        ['sg-all', 'sg-active', 'sg-cart', 'sg-inactive'].forEach(function (id) { $(id).textContent = '—'; });
+        return;
+      }
+      var list = r.data.segments || [];
+      var by = {}; list.forEach(function (s) { by[s.key] = s; });
+      var total = by.all ? Number(by.all.count) || 0 : 0;
+      function cnt(k) { return by[k] ? Number(by[k].count) || 0 : 0; }
+      $('sg-all').textContent = num(total);
+      $('sg-active').textContent = num(cnt('active_7d'));
+      $('sg-active-f').textContent = total ? Math.round((cnt('active_7d') / total) * 100) + '% of your subscribers' : 'Visited with notifications on';
+      $('sg-cart').textContent = num(cnt('cart_30d'));
+      $('sg-inactive').textContent = num(cnt('inactive_30d'));
+      $('segUpdated').textContent = 'Updated ' + new Date().toLocaleTimeString('en-IN', { hour: 'numeric', minute: '2-digit' });
+      function tile(s) {
+        var n = Number(s.count) || 0, pct = total ? Math.round((n / total) * 100) : 0;
+        return '<div class="seg-tile' + (n ? '' : ' empty') + '">' +
+          '<div class="top"><span class="ic"><i class="' + segIcon(s.key) + '"></i></span><div><b>' + esc(s.name) + '</b><span>' + esc(s.desc || '') + '</span></div></div>' +
+          '<div class="count">' + num(n) + '<small>' + (s.key === 'all' ? 'subscribers' : pct + '% of all') + '</small></div>' +
+          '<div class="bar"><span style="width:' + Math.min(100, pct) + '%"></span></div>' +
+          '<button class="btn sm' + (n ? ' primary' : '') + '" data-send-seg="' + esc(s.key) + '"' + (n ? '' : ' disabled title="No subscribers in this segment yet"') + '><i class="fas fa-paper-plane"></i> Send campaign</button></div>';
+      }
+      var behaviour = list.filter(function (s) { return !BROWSER_SEGS[s.key]; });
+      var browser = list.filter(function (s) { return BROWSER_SEGS[s.key]; });
+      $('segBehaviour').innerHTML = behaviour.length ? behaviour.map(tile).join('') : '<div class="muted">No segments yet.</div>';
+      $('segBrowser').innerHTML = browser.length ? browser.map(tile).join('') : '<div class="muted">No browser segments yet.</div>';
+    });
+  }
+  $('segRefresh').addEventListener('click', function () { loadSegmentsPage(); toast('Segment counts refreshed.'); });
+  $('view-segments').addEventListener('click', function (e) {
+    var b = e.target.closest('[data-send-seg]'); if (!b || b.disabled) return;
+    pendingSegment = b.getAttribute('data-send-seg');
+    showView('creator');
+  });
+
+  // ------------------------------------------------------------ plan & usage
+  var planData = null;
+  loaders.plan = function () { loadPlan(); };
+  function loadPlan() {
+    api('/my-store/plan').then(function (r) {
+      if (!r.ok || !r.data.success) {
+        $('planHeroName').textContent = 'Could not load your plan'; $('planHeroText').textContent = r.data.error || 'Refresh to try again.';
+        $('tiers').innerHTML = '<div class="muted">Plans could not be loaded.</div>';
+        return;
+      }
+      planData = r.data;
+      var u = r.data.usage, p = r.data.plan;
+      var pct = Math.min(100, Number(u.percent) || 0);
+      $('planHeroName').textContent = p.name + ' plan';
+      $('planHeroPrice').textContent = p.price === null ? 'Custom pricing' : p.price === 0 ? 'Free' : money(p.price) + ' / month';
+      $('planHeroText').textContent = num(u.used) + ' of ' + num(u.limit) + ' notifications used this month' + (p.custom_limit ? ' (custom allowance)' : '');
+      $('planHeroBar').className = 'bar' + (pct >= 100 ? ' over' : pct >= 80 ? ' warn' : '');
+      $('planHeroBar').firstElementChild.style.width = pct + '%';
+      $('planHeroFoot').textContent = pct + '% used' + (u.resets_on ? ' · resets on ' + dateShort(u.resets_on) : '');
+      $('pu-camp').textContent = num(u.campaigns); $('pu-auto').textContent = num(u.automations);
+      $('pu-used').textContent = num(u.used); $('pu-left').textContent = num(u.remaining); $('pu-reset').textContent = dateShort(u.resets_on);
+      $('planContact').href = 'mailto:' + r.data.contact_email + '?subject=' + encodeURIComponent('SmartPush custom plan for ' + window.store.id);
+      renderPending(r.data.pending_request);
+      renderTiers();
+    });
+  }
+  function renderPending(req) {
+    var box = $('planPending');
+    if (!req) { box.classList.add('hidden'); box.innerHTML = ''; return; }
+    box.classList.remove('hidden');
+    box.innerHTML = '<i class="fas fa-circle-check"></i> <b>' + esc(req.plan_name) + ' plan requested</b> on ' + esc(dateShort(req.created_at)) + '. We will switch your store over and email you' +
+      (req.mailto ? ' — or <a href="' + esc(req.mailto) + '" target="_blank" rel="noopener">email us now</a> to speed it up.' : '.');
+  }
+  function renderTiers() {
+    var cur = planData.plan, pending = planData.pending_request;
+    var curIdx = planData.plans.findIndex(function (p) { return p.key === cur.key; });
+    $('tiers').innerHTML = planData.plans.map(function (p, i) {
+      var isCur = p.key === cur.key && !cur.custom_limit;
+      var tag = isCur ? 'Current plan' : (p.key === 'growth' && curIdx < 1 ? 'Most popular' : '');
+      var btn;
+      if (isCur) btn = '<button class="btn block" disabled><i class="fas fa-check"></i> Your current plan</button>';
+      else if (pending && pending.plan === p.key) btn = '<button class="btn block soft" disabled><i class="far fa-clock"></i> Requested</button>';
+      else btn = '<button class="btn block' + (i > curIdx ? ' primary' : '') + '" data-req-plan="' + esc(p.key) + '"><i class="fas fa-bolt"></i> ' + (i > curIdx ? 'Request upgrade' : 'Switch to this plan') + '</button>';
+      return '<div class="tier' + (isCur ? ' current' : '') + (tag === 'Most popular' ? ' recommended' : '') + '">' + (tag ? '<span class="tag">' + tag + '</span>' : '') +
+        '<h3>' + esc(p.name) + '</h3><div class="price">' + (p.price ? money(p.price) + '<small> / month</small>' : 'Free') + '</div>' +
+        '<div class="limit"><i class="fas fa-paper-plane"></i> ' + num(p.limit) + ' notifications / month</div>' +
+        '<p class="blurb">' + esc(p.blurb) + '</p><ul>' + p.features.map(function (f) { return '<li><i class="fas fa-check"></i>' + esc(f) + '</li>'; }).join('') + '</ul>' + btn + '</div>';
+    }).join('');
+  }
+  $('tiers').addEventListener('click', function (e) {
+    var b = e.target.closest('[data-req-plan]'); if (!b || !planData) return;
+    var key = b.getAttribute('data-req-plan');
+    var p = planData.plans.filter(function (x) { return x.key === key; })[0]; if (!p) return;
+    if (!window.confirm('Request the ' + p.name + ' plan (' + num(p.limit) + ' notifications a month' + (p.price ? ', ' + money(p.price) + '/month' : '') + ')? We will confirm by email before anything is charged.')) return;
+    b.disabled = true; b.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Sending…';
+    api('/my-store/upgrade-request', { method: 'POST', body: { plan: key } }).then(function (r) {
+      if (!r.ok || !r.data.success) { b.disabled = false; b.innerHTML = '<i class="fas fa-bolt"></i> Request upgrade'; return toast(r.data.error || 'Could not send the request.', 'err'); }
+      toast('Request sent. We will email you when ' + p.name + ' is active.', 'ok');
+      planData.pending_request = r.data.request;
+      renderPending(r.data.request); renderTiers();
+      if (r.data.request && r.data.request.mailto) window.open(r.data.request.mailto, '_blank');
+    });
   });
 
   // ------------------------------------------------------------ analytics / automations

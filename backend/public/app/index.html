@@ -11,14 +11,14 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <link rel="stylesheet" href="/css/automations.css?v=3">
   <link rel="stylesheet" href="/css/dashboard.css?v=4">
-  <link rel="stylesheet" href="/app/app.css?v=3">
+  <link rel="stylesheet" href="/app/app.css?v=4">
   <script>window.__RETNER_STORE__ = "__RETNER_STORE_JSON__";</script>
   <script src="/js/automations.js?v=3" defer></script>
   <script src="/js/media.js?v=1" defer></script>
   <script src="/js/analytics.js?v=2" defer></script>
   <script src="/js/campaign-preview.js?v=2" defer></script>
   <script src="/js/campaigns.js?v=2" defer></script>
-  <script src="/app/app.js?v=3" defer></script>
+  <script src="/app/app.js?v=4" defer></script>
 </head>
 <body>
   <!-- LOGIN -->
@@ -45,7 +45,9 @@
           <button data-view="campaigns">Campaigns</button>
           <button data-view="automations">Automations</button>
           <button data-view="subscribers">Subscribers</button>
+          <button data-view="segments">Segments</button>
           <button data-view="analytics">Analytics</button>
+          <button data-view="plan">Plan</button>
         </nav>
         <div class="tb-right">
           <button class="icon-btn" id="bellBtn" aria-label="Notifications" title="What's new"><i class="far fa-bell"></i><span class="dot hidden" id="bellDot"></span></button>
@@ -60,9 +62,11 @@
           <button data-view="campaigns" data-tip="Campaigns"><i class="fas fa-bullhorn"></i></button>
           <button data-view="automations" data-tip="Automations"><i class="fas fa-wand-magic-sparkles"></i></button>
           <button data-view="subscribers" data-tip="Subscribers"><i class="fas fa-users"></i></button>
+          <button data-view="segments" data-tip="Segments"><i class="fas fa-layer-group"></i></button>
           <button data-view="analytics" data-tip="Analytics"><i class="fas fa-chart-line"></i></button>
         </div>
         <div class="grp bottom">
+          <button data-view="plan" data-tip="Plan &amp; usage"><i class="fas fa-bolt"></i></button>
           <button data-view="settings" data-tip="Settings"><i class="fas fa-gear"></i></button>
           <button id="helpBtn" data-tip="Help"><i class="far fa-circle-question"></i></button>
           <button id="logoutBtn" data-tip="Log out"><i class="fas fa-arrow-right-from-bracket"></i></button>
@@ -256,12 +260,80 @@
               <div class="chart-big"><canvas id="subChart"></canvas></div>
             </div>
             <div class="side">
-              <div class="card"><h3>Segments</h3><p class="sub">Targeting by segment is coming to the campaign creator.</p><ul class="seg-list" id="segList"><li class="muted">Loading…</li></ul></div>
+              <div class="card"><div class="card-head"><h3>Segments</h3><button class="btn sm" data-view="segments">View all</button></div><p class="sub">Pick any of these as the audience of a campaign.</p><ul class="seg-list" id="segList"><li class="muted">Loading…</li></ul></div>
             </div>
           </div>
           <div class="card" style="margin-top:20px;">
             <div class="card-head"><h3>Latest subscribers</h3><span class="chip" id="subListNote"></span></div>
             <div class="table-wrap"><table class="tbl"><thead><tr><th>Subscribed</th><th>Subscriber</th><th>Browser</th><th>Last seen</th><th>Status</th></tr></thead><tbody id="subscribersTableBody"></tbody></table></div>
+          </div>
+        </section>
+
+        <!-- SEGMENTS -->
+        <section class="view" id="view-segments">
+          <div class="page-head">
+            <div><h1>Segments</h1><p>Ready-made audiences, counted live from your subscribers. Pick one to send a targeted campaign.</p></div>
+            <div class="head-actions"><button class="btn" id="segRefresh"><i class="fas fa-rotate"></i> Refresh</button><button class="btn primary" data-view="creator"><i class="fas fa-plus"></i> New campaign</button></div>
+          </div>
+          <div class="kpis">
+            <div class="kpi"><div class="k-top"><span class="k-ic"><i class="fas fa-users"></i></span>Reachable subscribers</div><div class="k-val"><span id="sg-all" class="skel">0000</span></div><div class="k-foot">Everyone with notifications on</div></div>
+            <div class="kpi"><div class="k-top"><span class="k-ic green"><i class="fas fa-bolt"></i></span>Active this week</div><div class="k-val"><span id="sg-active" class="skel">000</span></div><div class="k-foot" id="sg-active-f">&nbsp;</div></div>
+            <div class="kpi"><div class="k-top"><span class="k-ic amber"><i class="fas fa-cart-shopping"></i></span>Added to cart</div><div class="k-val"><span id="sg-cart" class="skel">000</span></div><div class="k-foot">In the last 30 days</div></div>
+            <div class="kpi"><div class="k-top"><span class="k-ic violet"><i class="fas fa-moon"></i></span>Inactive 30+ days</div><div class="k-val"><span id="sg-inactive" class="skel">000</span></div><div class="k-foot">Good for a win-back offer</div></div>
+          </div>
+          <div class="card">
+            <div class="card-head"><div><h3>Behaviour</h3><div class="muted" style="font-size:12.5px">Based on visits, carts and orders of subscribers with notifications on.</div></div><span class="chip" id="segUpdated"></span></div>
+            <div class="seg-page-grid" id="segBehaviour"><div class="muted">Loading…</div></div>
+          </div>
+          <div class="card" style="margin-top:20px;">
+            <div class="card-head"><div><h3>Browser &amp; device</h3><div class="muted" style="font-size:12.5px">Useful when a promotion or image only works well on some devices.</div></div></div>
+            <div class="seg-page-grid" id="segBrowser"><div class="muted">Loading…</div></div>
+          </div>
+          <div class="card" style="margin-top:20px;">
+            <h3>How segments work</h3>
+            <p class="sub">Nothing to set up: segments are recalculated from live data every time you open this page or the campaign creator.</p>
+            <ul class="how-list">
+              <li><i class="fas fa-circle-check"></i> A subscriber can be in several segments at once; the same person is never sent one campaign twice.</li>
+              <li><i class="fas fa-circle-check"></i> Only subscribers whose notifications are still on are counted, so the reach you see is the reach you get.</li>
+              <li><i class="fas fa-circle-check"></i> "Added to cart" and "Bought recently" need Retner running on your storefront (turned on in the theme editor).</li>
+            </ul>
+          </div>
+        </section>
+
+        <!-- PLAN & USAGE -->
+        <section class="view" id="view-plan">
+          <div class="page-head">
+            <div><h1>Plan &amp; usage</h1><p>Your monthly notification allowance, and the plans you can move to.</p></div>
+          </div>
+          <div class="plan-grid">
+            <div class="plan plan-hero" id="planHero">
+              <div class="plan-hero-top"><span class="plan-chip">Current plan</span><span class="plan-chip ghost" id="planHeroPrice"></span></div>
+              <h3 id="planHeroName">Loading…</h3>
+              <p id="planHeroText">Fetching this month's usage…</p>
+              <div class="bar" id="planHeroBar"><span style="width:0%"></span></div>
+              <small id="planHeroFoot"></small>
+            </div>
+            <div class="card">
+              <h3>This month</h3>
+              <p class="sub">Every notification delivered to a push service counts, including automations. Test sends are free.</p>
+              <ul class="usage-list">
+                <li><span><i class="fas fa-bullhorn"></i> Campaigns</span><b id="pu-camp">—</b></li>
+                <li><span><i class="fas fa-wand-magic-sparkles"></i> Automations</span><b id="pu-auto">—</b></li>
+                <li><span><i class="fas fa-paper-plane"></i> Total used</span><b id="pu-used">—</b></li>
+                <li><span><i class="fas fa-battery-half"></i> Remaining</span><b id="pu-left">—</b></li>
+                <li><span><i class="far fa-calendar"></i> Resets on</span><b id="pu-reset">—</b></li>
+              </ul>
+            </div>
+          </div>
+          <div class="ok-box hidden" id="planPending" style="margin-top:20px;"></div>
+          <h2 class="section-title">Choose a plan</h2>
+          <p class="muted" style="margin:-8px 0 16px;">Request a plan and we switch you over, usually the same day. No charge until you confirm with us.</p>
+          <div class="tiers" id="tiers"><div class="muted">Loading plans…</div></div>
+          <div class="card" style="margin-top:20px;">
+            <div class="row-between">
+              <div><h3>Need more than Pro, or an annual deal?</h3><p class="sub" style="margin:0;">Write to us and we will set up a custom allowance for your store.</p></div>
+              <a class="btn" id="planContact" href="#" target="_blank" rel="noopener"><i class="far fa-envelope"></i> Contact us</a>
+            </div>
           </div>
         </section>
 

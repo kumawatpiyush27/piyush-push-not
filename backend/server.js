@@ -15,6 +15,7 @@ const { SERVICE_WORKER_SOURCE } = require('./sw-source');
 const media = require('./media');
 const analytics = require('./analytics');
 const usage = require('./usage');
+const plans = require('./plans');
 
 const app = express();
 
@@ -575,10 +576,71 @@ app.get('/my-store/segments', async (req, res) => {
 
 app.get('/my-store/usage', async (req, res) => {
     try {
-        res.json({ success: true, usage: await usage.getUsage(getPool(), req.storeId) });
+        const u = await usage.getUsage(getPool(), req.storeId);
+        res.json({ success: true, usage: Object.assign({}, u, { plan: plans.planForLimit(u.limit) }) });
     } catch (e) {
         console.error('Usage error:', e.message);
         res.status(500).json({ success: false, error: 'Could not load usage' });
+    }
+});
+
+// Plan pages (dashboard "Plan" view and the Shopify app's /app/plan).
+// plan_requests is created on first use (additive; see sql/20261125_plan_requests.sql).
+let planRequestsReady = null;
+function ensurePlanRequests(db) {
+    if (!planRequestsReady) {
+        planRequestsReady = db.query(`CREATE TABLE IF NOT EXISTS plan_requests (
+            id SERIAL PRIMARY KEY, store_id TEXT NOT NULL, plan TEXT NOT NULL, note TEXT,
+            status TEXT NOT NULL DEFAULT 'pending', created_at TIMESTAMPTZ NOT NULL DEFAULT NOW(), resolved_at TIMESTAMPTZ)`)
+            .then(() => db.query('CREATE INDEX IF NOT EXISTS plan_requests_store_idx ON plan_requests (store_id, created_at DESC)'))
+            .catch((e) => { planRequestsReady = null; throw e; });
+    }
+    return planRequestsReady;
+}
+async function pendingPlanRequest(db, storeId) {
+    const { rows } = await db.query(`SELECT id, plan, note, created_at FROM plan_requests WHERE store_id = $1 AND status = 'pending' ORDER BY created_at DESC LIMIT 1`, [storeId]);
+    const r = rows[0];
+    if (!r) return null;
+    const p = plans.byKey(r.plan);
+    return { id: r.id, plan: r.plan, plan_name: p ? p.name : r.plan, note: r.note, created_at: r.created_at, mailto: p ? plans.mailto(p, storeId) : null };
+}
+
+app.get('/my-store/plan', async (req, res) => {
+    try {
+        const db = getPool();
+        await ensurePlanRequests(db);
+        const u = await usage.getUsage(db, req.storeId);
+        res.json({
+            success: true,
+            usage: u,
+            plan: plans.planForLimit(u.limit),
+            plans: plans.PLANS,
+            contact_email: plans.contactEmail(),
+            pending_request: await pendingPlanRequest(db, req.storeId),
+        });
+    } catch (e) {
+        console.error('Plan error:', e.message);
+        res.status(500).json({ success: false, error: 'Could not load your plan' });
+    }
+});
+
+app.post('/my-store/upgrade-request', async (req, res) => {
+    const plan = plans.byKey(String((req.body && req.body.plan) || ''));
+    if (!plan) return res.status(400).json({ success: false, error: 'Pick a plan to request.' });
+    const note = String((req.body && req.body.note) || '').trim().slice(0, 500);
+    try {
+        const db = getPool();
+        await ensurePlanRequests(db);
+        const current = plans.planForLimit((await usage.getUsage(db, req.storeId)).limit);
+        if (current.key === plan.key && !current.custom_limit) return res.status(400).json({ success: false, error: 'You are already on the ' + plan.name + ' plan.' });
+        // One open request per store: a new choice replaces the pending one.
+        const pending = await pendingPlanRequest(db, req.storeId);
+        if (pending) await db.query('UPDATE plan_requests SET plan = $1, note = $2, created_at = NOW() WHERE id = $3', [plan.key, note || null, pending.id]);
+        else await db.query('INSERT INTO plan_requests (store_id, plan, note) VALUES ($1, $2, $3)', [req.storeId, plan.key, note || null]);
+        res.json({ success: true, request: await pendingPlanRequest(db, req.storeId), contact_email: plans.contactEmail() });
+    } catch (e) {
+        console.error('Upgrade request error:', e.message);
+        res.status(500).json({ success: false, error: 'Could not send your request. Please try again.' });
     }
 });
 
@@ -921,6 +983,24 @@ app.get('/master-admin', (req, res) => {
 
         <div id="dashboardSection" style="display:none;" class="mt-4">
             <div class="d-flex justify-content-between align-items-center mb-3">
+                <h3>Plan upgrade requests <span class="badge bg-warning text-dark" id="requestCount">0</span></h3>
+            </div>
+            <div class="card shadow-sm mb-5">
+                <table class="table table-hover mb-0">
+                    <thead class="table-dark">
+                        <tr>
+                            <th>Store</th>
+                            <th>Current limit</th>
+                            <th>Requested plan</th>
+                            <th>Note</th>
+                            <th>Requested</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="requestTable"><tr><td colspan="6" class="text-muted">Loading…</td></tr></tbody>
+                </table>
+            </div>
+            <div class="d-flex justify-content-between align-items-center mb-3">
                 <h3>All Stores</h3>
                 <button class="btn btn-secondary btn-sm" onclick="location.reload()">Refresh</button>
             </div>
@@ -967,6 +1047,40 @@ app.get('/master-admin', (req, res) => {
             document.getElementById('loginSection').style.display = 'none';
             document.getElementById('dashboardSection').style.display = 'block';
             loadStores();
+            loadRequests();
+        }
+
+        function escapeHtml(v) { return String(v == null ? '' : v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
+
+        async function loadRequests() {
+            const res = await fetch(API_URL + '/plan-requests?token=' + adminToken);
+            if(res.status === 403) { localStorage.removeItem('super_token'); location.reload(); return; }
+            const data = await res.json();
+            const rows = data.requests || [];
+            document.getElementById('requestCount').textContent = rows.length;
+            document.getElementById('requestTable').innerHTML = rows.length ? rows.map(r => \`
+                <tr>
+                    <td><strong>\${escapeHtml(r.store_name || r.store_id)}</strong><br><small class="text-muted">\${escapeHtml(r.store_id)}\${r.store_email ? ' · ' + escapeHtml(r.store_email) : ''}</small></td>
+                    <td>\${Number(r.monthly_limit || 1000).toLocaleString('en-IN')}</td>
+                    <td><strong>\${escapeHtml(r.plan_name)}</strong><br><small class="text-muted">\${Number(r.plan_limit || 0).toLocaleString('en-IN')} / month\${r.plan_price ? ' · ₹' + r.plan_price : ''}</small></td>
+                    <td><small>\${escapeHtml(r.note || '-')}</small></td>
+                    <td>\${new Date(r.created_at).toLocaleString()}</td>
+                    <td class="text-nowrap">
+                        <button class="btn btn-sm btn-success" onclick="resolveRequest(\${r.id}, \${Number(r.plan_limit || 0)})">Set \${Number(r.plan_limit || 0).toLocaleString('en-IN')} &amp; done</button>
+                        <button class="btn btn-sm btn-outline-secondary" onclick="resolveRequest(\${r.id}, null)">Dismiss</button>
+                    </td>
+                </tr>
+            \`).join('') : '<tr><td colspan="6" class="text-muted">No pending requests.</td></tr>';
+        }
+
+        async function resolveRequest(id, limit) {
+            if(limit === null && !confirm('Dismiss this request without changing the limit?')) return;
+            const res = await fetch(API_URL + '/plan-requests/' + id + '/resolve', {
+                method:'POST',
+                headers:{'Content-Type':'application/json'},
+                body:JSON.stringify({token:adminToken, limit})
+            });
+            if(res.ok) { loadRequests(); loadStores(); } else { alert('Could not update the request.'); }
         }
 
         async function loadStores() {
@@ -1039,6 +1153,42 @@ app.post('/api/super/update-limit', auth.requireSuper, async (req, res) => {
     const db = getPool();
     await db.query('UPDATE stores SET monthly_limit = $1 WHERE store_id = $2', [parseInt(req.body.limit, 10) || 0, req.body.store_id]);
     res.json({ success: true });
+});
+
+// Pending plan upgrade requests (see /my-store/upgrade-request).
+app.get('/api/super/plan-requests', auth.requireSuper, async (req, res) => {
+    try {
+        const db = getPool();
+        await ensurePlanRequests(db);
+        const { rows } = await db.query(`
+            SELECT r.id, r.store_id, r.plan, r.note, r.created_at, s.store_name, s.store_email, s.monthly_limit
+            FROM plan_requests r LEFT JOIN stores s ON s.store_id = r.store_id
+            WHERE r.status = 'pending' ORDER BY r.created_at DESC LIMIT 200`);
+        res.json({ requests: rows.map((r) => { const p = plans.byKey(r.plan); return Object.assign({}, r, { plan_name: p ? p.name : r.plan, plan_limit: p ? p.limit : null, plan_price: p ? p.price : null }); }) });
+    } catch (e) {
+        console.error('Plan requests error:', e.message);
+        res.status(500).json({ requests: [], error: 'Could not load requests' });
+    }
+});
+
+// Resolves a request: with a limit it also updates the store (status "done"),
+// without one it is just closed (status "dismissed"). Nothing is deleted.
+app.post('/api/super/plan-requests/:id/resolve', auth.requireSuper, async (req, res) => {
+    const id = parseInt(req.params.id, 10);
+    const limit = req.body && req.body.limit !== null && req.body.limit !== undefined ? parseInt(req.body.limit, 10) : null;
+    if (!id) return res.status(400).json({ success: false, error: 'Bad request id' });
+    try {
+        const db = getPool();
+        await ensurePlanRequests(db);
+        const { rows } = await db.query(`SELECT store_id FROM plan_requests WHERE id = $1 AND status = 'pending'`, [id]);
+        if (!rows.length) return res.status(404).json({ success: false, error: 'Request not found or already resolved' });
+        if (limit && limit > 0) await db.query('UPDATE stores SET monthly_limit = $1 WHERE store_id = $2', [limit, rows[0].store_id]);
+        await db.query(`UPDATE plan_requests SET status = $2, resolved_at = NOW() WHERE id = $1`, [id, limit && limit > 0 ? 'done' : 'dismissed']);
+        res.json({ success: true });
+    } catch (e) {
+        console.error('Resolve request error:', e.message);
+        res.status(500).json({ success: false, error: 'Could not update the request' });
+    }
 });
 
 app.post('/api/super/delete-store', auth.requireSuper, async (req, res) => {
