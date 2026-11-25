@@ -91,7 +91,7 @@
     });
     current = name;
     if (!(opts && opts.silent) && window.location.hash !== '#' + name) window.history.pushState({ view: name }, '', '#' + name);
-    window.scrollTo({ top: 0 });
+    var mainEl = document.querySelector(".main"); if (mainEl) mainEl.scrollTop = 0; window.scrollTo({ top: 0 });
     if (loaders[name]) loaders[name]();
   }
   window.addEventListener('popstate', function () { var h = window.location.hash.replace('#', ''); if (h) showView(h, { silent: true }); });

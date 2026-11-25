@@ -31,9 +31,10 @@ input, textarea, select { font: inherit; color: inherit; }
 .lg-error { margin-top: 12px; color: var(--err); background: var(--err-bg); border-radius: var(--r-sm); padding: 8px 10px; font-size: 13px; }
 
 /* ---------- shell ---------- */
-.app { display: none; min-height: 100vh; padding: 14px; }
+.app { display: none; height: 100vh; padding: 14px; }
 .app.on { display: block; }
-.frame { background: var(--surface); border-radius: 28px; box-shadow: var(--sh); min-height: calc(100vh - 28px); display: grid; grid-template-columns: 76px 1fr; grid-template-rows: 72px 1fr; overflow: hidden; }
+/* The frame fills the viewport; only the main column scrolls, so the rail and top bar stay put. */
+.frame { background: var(--surface); border-radius: 28px; box-shadow: var(--sh); height: 100%; display: grid; grid-template-columns: 76px minmax(0, 1fr); grid-template-rows: 72px minmax(0, 1fr); overflow: hidden; }
 .topbar { grid-column: 1 / -1; display: flex; align-items: center; gap: 16px; padding: 0 22px 0 18px; border-bottom: 1px solid var(--border-2); }
 .brand { display: flex; align-items: center; gap: 10px; min-width: 200px; }
 .brand img { height: 34px; }
@@ -46,9 +47,7 @@ input, textarea, select { font: inherit; color: inherit; }
 .icon-btn:hover { background: var(--surface-2); color: var(--text); }
 .icon-btn .dot { position: absolute; top: 9px; right: 10px; width: 7px; height: 7px; border-radius: 50%; background: #ef4444; border: 2px solid #fff; }
 .avatar { width: 40px; height: 40px; border-radius: 50%; background: var(--primary); color: #fff; font-weight: 700; display: inline-flex; align-items: center; justify-content: center; cursor: default; }
-.rail { border-right: 1px solid var(--border-2); display: flex; flex-direction: column; align-items: center; padding: 18px 0; gap: 6px; position: sticky; top: 86px; align-self: start; height: calc(100vh - 100px); overflow: hidden; }
-.frame { position: relative; }
-.frame > .topbar { position: sticky; top: 14px; z-index: 6; background: var(--surface); border-radius: 28px 28px 0 0; }
+.rail { border-right: 1px solid var(--border-2); display: flex; flex-direction: column; align-items: center; padding: 18px 0; gap: 6px; min-height: 0; overflow: hidden; }
 .rail .grp { background: var(--surface-2); border-radius: 999px; padding: 8px; display: flex; flex-direction: column; gap: 6px; }
 .rail .grp.bottom { margin-top: auto; }
 .rail button { width: 44px; height: 44px; border-radius: 50%; border: 0; background: transparent; color: var(--text-2); font-size: 17px; cursor: pointer; display: inline-flex; align-items: center; justify-content: center; position: relative; }
@@ -56,7 +55,7 @@ input, textarea, select { font: inherit; color: inherit; }
 .rail button.active { background: var(--primary); color: #fff; box-shadow: 0 6px 14px rgba(37, 99, 235, .35); }
 .rail button[data-tip]::after { content: attr(data-tip); position: absolute; left: 54px; top: 50%; transform: translateY(-50%); background: #111827; color: #fff; font-size: 12px; padding: 4px 8px; border-radius: 6px; white-space: nowrap; opacity: 0; pointer-events: none; transition: opacity .15s; z-index: 5; }
 .rail button:hover::after { opacity: 1; }
-.main { padding: 26px 28px 40px; min-width: 0; }
+.main { padding: 26px 28px 40px; min-width: 0; min-height: 0; overflow-y: auto; overflow-x: hidden; overscroll-behavior: contain; }
 .view { display: none; }
 .view.on { display: block; }
 .page-head { display: flex; align-items: flex-end; justify-content: space-between; gap: 16px; margin-bottom: 22px; flex-wrap: wrap; }
@@ -238,7 +237,7 @@ table.tbl tr:last-child td { border-bottom: 0; }
 /* ---------- responsive ---------- */
 @media (max-width: 1100px) { .grid-home, .creator, .sub-grid { grid-template-columns: minmax(0, 1fr); } .creator .sticky { position: static; } .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); } }
 @media (max-width: 760px) {
-  .app { padding: 0; } .frame { border-radius: 0; grid-template-columns: 1fr; grid-template-rows: auto 1fr; min-height: 100vh; }
+  .app { padding: 0; } .frame { border-radius: 0; grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
   .rail { display: none; } .topbar { flex-wrap: wrap; height: auto; padding: 10px 12px; gap: 8px; } .brand, .tb-right { min-width: 0; }
   .nav { order: 3; width: 100%; overflow-x: auto; justify-content: flex-start; } .main { padding: 16px 14px 90px; }
   .kpis { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; } .kpi { padding: 14px; } .kpi .k-val { font-size: 22px; } .page-head h1 { font-size: 22px; } .qa-grid { grid-template-columns: repeat(3, minmax(0, 1fr)); }
