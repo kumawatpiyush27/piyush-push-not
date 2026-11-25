@@ -16,6 +16,7 @@ const media = require('./media');
 const analytics = require('./analytics');
 const usage = require('./usage');
 const plans = require('./plans');
+const retnerProxy = require('./retnerProxy');
 
 const app = express();
 
@@ -229,6 +230,11 @@ async function legacySubscribe(req, res) {
         if (!automations.isValidPushEndpoint(req.body && req.body.endpoint) || !req.body.keys) {
             return res.status(400).json({ success: false, error: 'Invalid subscription' });
         }
+        if (retnerProxy.enabled()) {
+            const shop = String(req.body.storeDomain || `${req.body.storeId || ''}.myshopify.com`).toLowerCase();
+            const r = await retnerProxy.publicForward('POST', shop, 'subscribe', {}, req.body);
+            return res.status(r.status).json(r.data);
+        }
         await SubscriptionModel.create({ ...req.body, cartToken: automations.normalizeCartToken(req.body.cartToken) });
         res.json({ success: true });
     } catch (err) {
@@ -260,6 +266,10 @@ app.get('/apps/push/config', async (req, res) => {
     try {
         const { shop } = req.query;
         if (!shop) return res.json({ success: false, error: 'No shop provided' });
+        if (retnerProxy.enabled()) {
+            const r = await retnerProxy.publicForward('GET', String(shop).toLowerCase(), 'config', {});
+            return res.status(r.status).json(r.data);
+        }
 
         const shopHandle = shop.split('.')[0];
         const db = getPool();
@@ -385,7 +395,10 @@ app.get('/m/:file', async (req, res) => {
     }
 });
 
-app.get('/api/vapid-public-key', (req, res) => {
+app.get('/api/vapid-public-key', async (req, res) => {
+    if (retnerProxy.enabled()) {
+        try { return res.json({ publicKey: await retnerProxy.vapidPublicKey() }); } catch (e) { console.error('VAPID key proxy error:', e.message); }
+    }
     res.json({ publicKey: automations.primaryVapidPublicKey() });
 });
 
@@ -442,6 +455,11 @@ app.get('/store-admin', async (req, res) => {
 // Every /my-store/* route requires a valid store session; the store id is
 // taken from the session token (see auth.requireStore).
 app.use('/my-store', auth.requireStore);
+// Push data lives in Retner when RETNER_BACKEND_URL is set: the dashboard API
+// below is forwarded there (same data as the Retner dashboard and the Shopify
+// app). Plan, usage, passwords and the super admin stay local. See retnerProxy.js.
+// (regex route: works on Express 4 (Vercel, root package.json) and Express 5 (backend/package.json))
+app.all(/^\/my-store\/(.+)$/, express.raw({ type: ['image/jpeg', 'image/png', 'image/webp'], limit: '2560kb' }), retnerProxy.myStoreProxy);
 
 // Image upload: raw JPG/PNG/WebP body (the dashboard resizes it first).
 app.post('/my-store/media', express.raw({ type: ['image/jpeg', 'image/png', 'image/webp'], limit: '2560kb' }), async (req, res) => {
@@ -945,6 +963,8 @@ app.post('/api/track-event', async (req, res) => {
 /* Automation engine: called every 5 minutes by Vercel Cron (Authorization: Bearer CRON_SECRET) */
 async function cronHandler(req, res) {
     if (!auth.isCronRequest(req)) return res.status(401).json({ success: false, error: 'unauthorized' });
+    // The engine runs in Retner (every 5 minutes there); running it here too would send duplicates.
+    if (retnerProxy.enabled()) return res.json({ success: true, skipped: true, reason: 'automations run in Retner' });
     try {
         const summary = await automations.runAutomations({ db: getPool(), webPush });
         res.json({ success: true, summary });
