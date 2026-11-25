@@ -119,6 +119,12 @@
   });
   $('logoutBtn').addEventListener('click', function () { sessionExpired(); window.location.hash = ''; });
   $('helpBtn').addEventListener('click', function () { window.open('https://retner.ai', '_blank'); });
+  // The same push account inside the Retner platform; the store token signs you in there.
+  $('retnerBtn').addEventListener('click', function () {
+    var base = (window.__RETNER_URL__ && window.__RETNER_URL__.indexOf('__') !== 0) ? window.__RETNER_URL__ : 'https://app.retner.ai';
+    var token = window.store && window.store.token;
+    window.open(base.replace(/\/$/, '') + '/push' + (token ? '?sso_token=' + encodeURIComponent(token) : ''), '_blank');
+  });
   $('bellBtn').addEventListener('click', function () { toast(bellText || 'No new alerts. Campaigns, automations and subscriber updates will show here.'); });
   var bellText = '';
 
