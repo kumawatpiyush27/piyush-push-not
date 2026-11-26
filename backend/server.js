@@ -669,6 +669,14 @@ app.get('/my-store/tips', async (req, res) => {
         res.json({ success: true, items: r.items, day: r.context ? r.context.day : null, theme_url: `https://${req.storeId}.myshopify.com/admin/themes/current/editor?context=apps&activateAppId=${clientId}/popup` });
     } catch (e) { console.error('Tips error:', e.message); res.status(500).json({ success: false, items: [], error: 'Could not load ideas' }); }
 });
+// Bulk "shown" for a surface that rendered several items at once (the app home).
+app.post('/my-store/tips/shown', async (req, res) => {
+    try {
+        const ids = Array.isArray(req.body && req.body.ids) ? req.body.ids.slice(0, 10) : [];
+        for (const id of ids) await tips.recordEvent(getPool(), req.storeId, id, 'shown', req.body && req.body.surface);
+        res.json({ success: true, count: ids.length });
+    } catch (e) { res.status(e.status || 500).json({ success: false, error: e.status ? e.message : 'Could not save' }); }
+});
 app.post('/my-store/tips/:id/event', async (req, res) => {
     try {
         await tips.recordEvent(getPool(), req.storeId, req.params.id, String((req.body && req.body.kind) || ''), req.body && req.body.surface);
