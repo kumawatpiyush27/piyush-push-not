@@ -410,9 +410,7 @@ let dashboardCache = null;
 function dashboardHtml(injectedStore) {
     if (!dashboardCache || process.env.NODE_ENV !== 'production') dashboardCache = require('fs').readFileSync(DASHBOARD_FILE, 'utf8');
     const payload = injectedStore ? JSON.stringify(injectedStore).replace(/</g, '\\u003c') : 'null';
-    // Where the Retner platform lives ("Open in Retner" button); e.g. http://localhost:3000 while developing.
-    const retnerUrl = JSON.stringify((process.env.RETNER_DASHBOARD_URL || 'https://app.retner.ai').replace(/\/$/, ''));
-    return dashboardCache.replace('"__RETNER_STORE_JSON__"', payload).replace('"__RETNER_URL__"', retnerUrl);
+    return dashboardCache.replace('"__RETNER_STORE_JSON__"', payload);
 }
 
 // Store Admin Dashboard (SSO enabled)
