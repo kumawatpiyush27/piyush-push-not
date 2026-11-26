@@ -128,7 +128,7 @@
         try { data = await res.json(); } catch (e) { data = {}; }
         state.busy = false;
         if (!res.ok || !data.success) throw new Error(data.error || (res.status === 413 ? 'Image is too large.' : 'Upload failed. Please try again.'));
-        set(data.url, file.name + ' · ' + (data.width && data.height ? data.width + '×' + data.height + ' · ' : '') + kb(data.size || prepared.blob.size));
+        set(data.url, file.name + ' · ' + data.width + '×' + data.height + ' · ' + kb(data.size));
       } catch (err) {
         state.busy = false;
         state.error = err.message || 'Upload failed.';
