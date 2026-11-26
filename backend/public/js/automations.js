@@ -199,6 +199,9 @@
         return;
       }
       S.data = r.data;
+      // Deep link from the ideas feed (window.__openAutomation = key): open that editor straight away.
+      var want = window.__openAutomation; window.__openAutomation = null;
+      if (want && S.data.automations && S.data.automations[want] !== undefined) { openEditor(want); return; }
       if (S.edit) renderEditor(); else renderList();
     });
   }

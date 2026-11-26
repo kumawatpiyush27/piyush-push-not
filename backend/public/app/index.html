@@ -11,14 +11,14 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <link rel="stylesheet" href="/css/automations.css?v=3">
   <link rel="stylesheet" href="/css/dashboard.css?v=5">
-  <link rel="stylesheet" href="/app/app.css?v=7">
+  <link rel="stylesheet" href="/app/app.css?v=8">
   <script>window.__RETNER_STORE__ = "__RETNER_STORE_JSON__";</script>
-  <script src="/js/automations.js?v=3" defer></script>
+  <script src="/js/automations.js?v=4" defer></script>
   <script src="/js/media.js?v=2" defer></script>
   <script src="/js/analytics.js?v=2" defer></script>
   <script src="/js/campaign-preview.js?v=2" defer></script>
   <script src="/js/campaigns.js?v=2" defer></script>
-  <script src="/app/app.js?v=8" defer></script>
+  <script src="/app/app.js?v=9" defer></script>
 </head>
 <body>
   <!-- LOGIN -->
@@ -78,7 +78,7 @@
         <!-- HOME -->
         <section class="view" id="view-home">
           <div class="page-head">
-            <div><h1 id="greeting">Good morning</h1><p>Stay on top of your subscribers, campaigns and automations.</p></div>
+            <div><h1 id="greeting">Good morning</h1><p id="homeTipLine">Stay on top of your subscribers, campaigns and automations.</p></div>
             <div class="head-actions">
               <div class="seg" id="homeRange"><button data-days="7">7 days</button><button data-days="30" class="active">30 days</button><button data-days="90">90 days</button></div>
               <button class="btn primary" data-view="creator"><i class="fas fa-plus"></i> New campaign</button>
@@ -109,6 +109,10 @@
                   <div class="qa" data-view="automations"><i class="fas fa-wand-magic-sparkles"></i>Automations</div>
                   <div class="qa" data-view="settings"><i class="fas fa-gear"></i>Settings</div>
                 </div>
+              </div>
+              <div class="card ideas" id="ideasCard">
+                <div class="card-head"><div><h3>Ideas for you</h3><p class="sub" id="ideasSub">Fresh every day.</p></div><button class="btn sm" id="ideasRefresh" title="Show other ideas"><i class="fas fa-rotate"></i></button></div>
+                <div class="ideas-list" id="ideasList"><div class="muted">Loading ideas…</div></div>
               </div>
               <div class="plan" id="planCard">
                 <span class="plan-chip hidden" id="planTrialChip"></span>
@@ -154,7 +158,7 @@
             <div class="form">
               <div class="cr-section">
                 <h3>Start from a template</h3>
-                <p class="sub">Pick one and edit the text, or write your own below.</p>
+                <p class="sub">Pick one and edit the text, or write your own below. Seasonal templates appear first when a season is near.</p>
                 <div class="tpl-row" id="tplRow"></div>
               </div>
 

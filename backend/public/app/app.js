@@ -154,6 +154,8 @@
     if (params.get('segment')) pendingSegment = params.get('segment');
     // ?tour=1 (from the Shopify app) replays the guided tour.
     if (params.get('tour')) window.__startTour = true;
+    // ?tip=<id> (from the Shopify app's ideas card) opens the creator with that template.
+    if (params.get('tip')) { pendingTemplate = { id: Number(params.get('tip')), params: null }; }
     var h = window.location.hash.replace('#', '');
     showView(q || h || 'home', { silent: !!h });
   }
@@ -168,7 +170,7 @@
     el.classList.add(t.change > 0 ? 'up' : 'down');
     el.textContent = (t.change > 0 ? '+' : '') + t.change + '%';
   }
-  loaders.home = function () { loadHome(); };
+  loaders.home = function () { loadHome(); loadIdeas(); loadTipLine(); };
   function loadHome() {
     Promise.all([api('/my-store/stats'), api('/my-store/analytics?days=' + homeDays + '&tz=' + encodeURIComponent(tz())), api('/my-store/usage')]).then(function (rs) {
       document.querySelectorAll('#view-home .skel').forEach(function (el) { el.classList.remove('skel'); });
@@ -303,17 +305,46 @@
   var EMOJIS = ['🎉', '🔥', '⚡', '🆕', '🎁', '💥', '🛍️', '🛒', '💙', '❤️', '✨', '⭐', '🚚', '📦', '⏰', '🏷️', '💸', '🤑', '👀', '👉', '✅', '🙌', '😍', '🥳', '🎊', '🍫', '☕', '💪', '🏃', '👗', '👟', '💄', '🎧', '📱', '🏠', '🌟', '🙏', '😊', '🤩', '💯'];
   var cType = 'regular', scheduleMode = 'now', btnCount = 0, creatorReady = false;
 
+  // Template library: items from /my-store/tips?surface=creator (editable in the
+  // master admin); the built-in list is the fallback while it loads or if it fails.
+  var libraryTemplates = null, pendingTemplate = null;
+  function applyTemplate(t) {
+    $('campTitle').value = t.title || ''; $('campMsg').value = t.msg || '';
+    setType(t.type === 'flash' ? 'flash' : 'regular');
+    if (t.btn) { if (!btnCount) addBtnRow(); var bt = $('btn1Txt'); if (bt) bt.value = t.btn; }
+    if (t.url) $('campUrl').value = t.url;
+    if (t.discount) $('campDiscount').value = t.discount;
+    counters(); preview();
+    toast('Template applied. Edit the text and add your link.');
+  }
+  function renderTemplateRow() {
+    var items = libraryTemplates && libraryTemplates.length ? libraryTemplates : null;
+    if (items) {
+      $('tplRow').innerHTML = items.map(function (t) {
+        return '<button type="button" class="tpl' + (t.kind === 'season' ? ' season' : '') + '" data-tip-id="' + t.id + '" title="' + esc(t.body || '') + '">' + esc(t.title) + '</button>';
+      }).join('');
+    } else {
+      $('tplRow').innerHTML = TEMPLATES.map(function (t, i) { return '<button type="button" class="tpl" data-tpl="' + i + '">' + esc(t.name) + '</button>'; }).join('');
+    }
+  }
+  function loadTemplateLibrary() {
+    api('/my-store/tips?surface=creator').then(function (r) {
+      if (r.ok && r.data.success) { libraryTemplates = r.data.items || []; renderTemplateRow(); }
+      if (pendingTemplate) { var pt = pendingTemplate; pendingTemplate = null; applyTemplate(pt.params); if (pt.id) tipEvent(pt.id, 'used', 'creator'); }
+    });
+  }
   function initCreator() {
     if (creatorReady) return; creatorReady = true;
-    $('tplRow').innerHTML = TEMPLATES.map(function (t, i) { return '<button type="button" class="tpl" data-tpl="' + i + '">' + esc(t.name) + '</button>'; }).join('');
+    renderTemplateRow();
     $('tplRow').addEventListener('click', function (e) {
-      var b = e.target.closest('[data-tpl]'); if (!b) return;
-      var t = TEMPLATES[Number(b.getAttribute('data-tpl'))];
-      $('campTitle').value = t.title; $('campMsg').value = t.msg;
-      setType(t.type);
-      if (!btnCount) addBtnRow(); $('btn1Txt').value = t.btn;
-      counters(); preview();
-      toast('Template applied. Edit the text and add your link.');
+      var b = e.target.closest('[data-tpl], [data-tip-id]'); if (!b) return;
+      if (b.hasAttribute('data-tip-id')) {
+        var id = Number(b.getAttribute('data-tip-id'));
+        var it = (libraryTemplates || []).filter(function (x) { return x.id === id; })[0]; if (!it) return;
+        applyTemplate(it.cta_params || {}); tipEvent(id, 'used', 'creator');
+        return;
+      }
+      applyTemplate(TEMPLATES[Number(b.getAttribute('data-tpl'))]);
     });
     document.querySelectorAll('#view-creator .cr-type .pick[data-type]').forEach(function (p) { p.addEventListener('click', function () { setType(p.getAttribute('data-type')); }); });
     $('sel-now').addEventListener('click', function () { setSchedule('now'); });
@@ -343,6 +374,7 @@
   var segments = [], segment = 'all', pendingSegment = null;
   loaders.creator = function () {
     if (pendingSegment) { segment = pendingSegment; pendingSegment = null; }
+    loadTemplateLibrary();
     loadSegments();
     if (window.RetnerCampaigns) window.RetnerCampaigns.onScheduleMode(scheduleMode);
     preview();
@@ -724,6 +756,44 @@
       $('pwMsg').textContent = r.data.success ? 'Password saved. You can now sign in with your store ID and this password.' : (r.data.error || 'Could not save the password.');
       if (r.data.success) $('setNewPassword').value = '';
     });
+  });
+
+  // ------------------------------------------------------------ ideas feed
+  var ideasItems = [], ideasThemeUrl = '';
+  function tipEvent(id, kind, surface) { api('/my-store/tips/' + id + '/event', { method: 'POST', body: { kind: kind, surface: surface || current } }); }
+  function loadTipLine() {
+    api('/my-store/tips?surface=loading').then(function (r) {
+      var t = r.ok && r.data.success && r.data.items && r.data.items[0];
+      if (!t) return;
+      $('homeTipLine').innerHTML = '<b>Did you know?</b> ' + esc(t.title) + ' <span class="muted">' + esc(t.body) + '</span>';
+      tipEvent(t.id, 'shown', 'loading');
+    });
+  }
+  var KIND_LABEL = { onboarding: 'Set-up step', template: 'Ready template', tip: 'Writing tip', feature: 'Feature', idea: 'Idea', season: 'Seasonal', coming_soon: 'Coming soon' };
+  function loadIdeas(more) {
+    api('/my-store/tips?surface=home&n=' + (more ? 6 : 3)).then(function (r) {
+      if (!r.ok || !r.data.success) { $('ideasList').innerHTML = '<div class="muted">Ideas could not be loaded.</div>'; return; }
+      ideasItems = r.data.items || []; ideasThemeUrl = r.data.theme_url || '';
+      $('ideasSub').textContent = r.data.day !== null && r.data.day <= 3 ? 'Your first days: do these in order.' : 'Fresh every day. Tap one to try it.';
+      $('ideasList').innerHTML = ideasItems.length ? ideasItems.map(function (t) {
+        return '<div class="idea ' + esc(t.kind) + '" data-idea="' + t.id + '"><span class="kind">' + esc(KIND_LABEL[t.kind] || t.kind) + '</span><b>' + esc(t.title) + '</b><span>' + esc(t.body) + '</span>' +
+          (t.cta_label ? '<button class="btn sm' + (t.kind === 'onboarding' ? ' primary' : '') + '" data-idea-go="' + t.id + '">' + esc(t.cta_label) + '</button>' : '') + '</div>';
+      }).join('') : '<div class="muted">You have seen every idea for today. Come back tomorrow.</div>';
+      ideasItems.forEach(function (t) { tipEvent(t.id, 'shown', 'home'); });
+    });
+  }
+  $('ideasRefresh').addEventListener('click', function () { loadIdeas(true); });
+  $('ideasList').addEventListener('click', function (e) {
+    var b = e.target.closest('[data-idea-go]'); if (!b) return;
+    var id = Number(b.getAttribute('data-idea-go'));
+    var t = ideasItems.filter(function (x) { return x.id === id; })[0]; if (!t) return;
+    var p = t.cta_params || {};
+    if (t.kind === 'coming_soon') { tipEvent(id, 'wanted', 'home'); b.disabled = true; b.innerHTML = '<i class="fas fa-check"></i> Noted, thanks'; toast('Thanks! We count every vote when we pick what to build next.', 'ok'); return; }
+    tipEvent(id, 'clicked', 'home');
+    if (t.cta_view === 'theme') { window.open(ideasThemeUrl || ('https://' + window.store.id + '.myshopify.com/admin/themes/current/editor?context=apps'), '_blank', 'noopener'); return; }
+    if (t.cta_view === 'creator' && (p.title || p.msg || p.type)) { pendingTemplate = { id: id, params: p }; showView('creator'); return; }
+    if (t.cta_view === 'automations' && p.automation) { window.__openAutomation = p.automation; showView('automations'); return; }
+    showView(t.cta_view || 'home');
   });
 
   // ------------------------------------------------------------ plan state (trial, limits, popups)

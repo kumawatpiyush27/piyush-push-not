@@ -17,6 +17,7 @@ const analytics = require('./analytics');
 const usage = require('./usage');
 const plans = require('./plans');
 const entitlements = require('./entitlements');
+const tips = require('./tips');
 
 const app = express();
 
@@ -660,6 +661,21 @@ app.post('/my-store/upgrade-request', async (req, res) => {
     }
 });
 
+// Ideas feed (see tips.js): ?surface=home|loading|creator|app, ?n=1..6
+app.get('/my-store/tips', async (req, res) => {
+    try {
+        const r = await tips.pick(getPool(), req.storeId, String(req.query.surface || 'home'), req.query.n);
+        const clientId = process.env.SHOPIFY_API_KEY || process.env.SHOPIFY_CLIENT_ID || 'd5c35985fb2e26a210f931c4b6a92c87';
+        res.json({ success: true, items: r.items, day: r.context ? r.context.day : null, theme_url: `https://${req.storeId}.myshopify.com/admin/themes/current/editor?context=apps&activateAppId=${clientId}/popup` });
+    } catch (e) { console.error('Tips error:', e.message); res.status(500).json({ success: false, items: [], error: 'Could not load ideas' }); }
+});
+app.post('/my-store/tips/:id/event', async (req, res) => {
+    try {
+        await tips.recordEvent(getPool(), req.storeId, req.params.id, String((req.body && req.body.kind) || ''), req.body && req.body.surface);
+        res.json({ success: true });
+    } catch (e) { res.status(e.status || 500).json({ success: false, error: e.status ? e.message : 'Could not save' }); }
+});
+
 // Trial, plan and popup state for the dashboards (see entitlements.js).
 app.get('/my-store/entitlements', async (req, res) => {
     try { res.json({ success: true, entitlements: await entitlements.get(getPool(), req.storeId) }); }
@@ -1052,6 +1068,42 @@ app.get('/master-admin', (req, res) => {
                 </table>
             </div>
             <div class="d-flex justify-content-between align-items-center mb-3">
+                <h3>Tips &amp; ideas <span class="badge bg-info text-dark" id="tipCount">0</span></h3>
+                <button class="btn btn-primary btn-sm" onclick="editTip(null)">+ New item</button>
+            </div>
+            <p class="text-muted small">Shown in the dashboard and the Shopify app ("Ideas for you", loading line, campaign templates). Changes apply at once, no deploy. Conditions and button params are JSON (see placeholders).</p>
+            <div class="card shadow-sm mb-3" id="tipEditor" style="display:none;">
+                <div class="card-body">
+                    <h5 id="tipEditorTitle">New item</h5>
+                    <input type="hidden" id="tip_id">
+                    <div class="row g-2">
+                        <div class="col-md-3"><label class="form-label small">Kind</label><select class="form-select form-select-sm" id="tip_kind"></select></div>
+                        <div class="col-md-7"><label class="form-label small">Title</label><input class="form-control form-control-sm" id="tip_title" maxlength="120"></div>
+                        <div class="col-md-2"><label class="form-label small">Priority 1–10</label><input type="number" class="form-control form-control-sm" id="tip_priority" min="1" max="10" value="5"></div>
+                        <div class="col-12"><label class="form-label small">Body (for templates: "Title · Message" preview text)</label><textarea class="form-control form-control-sm" id="tip_body" rows="2" maxlength="600"></textarea></div>
+                        <div class="col-md-3"><label class="form-label small">Button label</label><input class="form-control form-control-sm" id="tip_cta_label" maxlength="60"></div>
+                        <div class="col-md-3"><label class="form-label small">Button opens</label><select class="form-select form-select-sm" id="tip_cta_view"><option value="">(none)</option></select></div>
+                        <div class="col-md-6"><label class="form-label small">Button params JSON</label><input class="form-control form-control-sm" id="tip_cta_params" placeholder='{"title":"Weekend sale 🎉","msg":"20% off till Sunday","btn":"Shop now","type":"flash"} or {"automation":"abandoned_cart"}'></div>
+                        <div class="col-md-2"><label class="form-label small">Day from</label><input type="number" class="form-control form-control-sm" id="tip_day_min" placeholder="0"></div>
+                        <div class="col-md-2"><label class="form-label small">Day to</label><input type="number" class="form-control form-control-sm" id="tip_day_max" placeholder="blank = always"></div>
+                        <div class="col-md-2"><label class="form-label small">Season from</label><input type="date" class="form-control form-control-sm" id="tip_season_from"></div>
+                        <div class="col-md-2"><label class="form-label small">Season to</label><input type="date" class="form-control form-control-sm" id="tip_season_to"></div>
+                        <div class="col-md-4"><label class="form-label small">Conditions JSON</label><input class="form-control form-control-sm" id="tip_conditions" placeholder='{"no_campaign":true,"automation_off":"welcome","subscribers_gte":50}'></div>
+                        <div class="col-12 d-flex gap-2 mt-2">
+                            <button class="btn btn-success btn-sm" onclick="saveTip()">Save</button>
+                            <button class="btn btn-outline-secondary btn-sm" onclick="document.getElementById('tipEditor').style.display='none'">Cancel</button>
+                            <span class="text-danger small align-self-center" id="tipError"></span>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            <div class="card shadow-sm mb-5">
+                <table class="table table-hover table-sm mb-0">
+                    <thead class="table-dark"><tr><th>Kind</th><th>Title</th><th>Shows when</th><th>Shown</th><th>Clicked</th><th>Wanted</th><th>Actions</th></tr></thead>
+                    <tbody id="tipTable"><tr><td colspan="7" class="text-muted">Loading…</td></tr></tbody>
+                </table>
+            </div>
+            <div class="d-flex justify-content-between align-items-center mb-3">
                 <h3>All Stores</h3>
                 <button class="btn btn-secondary btn-sm" onclick="location.reload()">Refresh</button>
             </div>
@@ -1099,6 +1151,71 @@ app.get('/master-admin', (req, res) => {
             document.getElementById('dashboardSection').style.display = 'block';
             loadStores();
             loadRequests();
+            loadTips();
+        }
+
+        // ---- Tips & ideas
+        let tipsData = [], tipKinds = [], tipViews = [];
+        async function loadTips() {
+            const res = await fetch(API_URL + '/tips?token=' + adminToken);
+            const data = await res.json();
+            tipsData = data.tips || []; tipKinds = data.kinds || []; tipViews = data.views || [];
+            document.getElementById('tipCount').innerText = tipsData.filter(t => t.active).length + ' active';
+            document.getElementById('tip_kind').innerHTML = tipKinds.map(k => '<option value="' + k + '">' + k + '</option>').join('');
+            document.getElementById('tip_cta_view').innerHTML = '<option value="">(none)</option>' + tipViews.map(v => '<option value="' + v + '">' + v + '</option>').join('');
+            const when = (t) => {
+                const parts = [];
+                if (t.day_min !== null || t.day_max !== null) parts.push('day ' + (t.day_min ?? 0) + '–' + (t.day_max ?? '∞'));
+                if (t.season_from || t.season_to) parts.push((t.season_from || '').slice(0, 10) + ' → ' + (t.season_to || '').slice(0, 10));
+                const c = t.conditions && Object.keys(t.conditions).length ? Object.entries(t.conditions).map(([k, v]) => k + (v === true ? '' : ':' + v)).join(', ') : '';
+                if (c) parts.push(c);
+                return parts.join(' · ') || 'always';
+            };
+            document.getElementById('tipTable').innerHTML = tipsData.length ? tipsData.map(t => \`
+                <tr class="\${t.active ? '' : 'table-secondary text-muted'}">
+                    <td><span class="badge bg-light text-dark">\${escapeHtml(t.kind)}</span></td>
+                    <td><strong>\${escapeHtml(t.title)}</strong><br><small class="text-muted">\${escapeHtml((t.body || '').slice(0, 110))}</small></td>
+                    <td><small>\${escapeHtml(when(t))}</small></td>
+                    <td>\${t.shown}</td><td>\${t.clicked}</td><td>\${t.wanted}</td>
+                    <td class="text-nowrap">
+                        <button class="btn btn-sm btn-outline-primary" onclick="editTip(\${t.id})">Edit</button>
+                        <button class="btn btn-sm \${t.active ? 'btn-outline-warning' : 'btn-outline-success'}" onclick="toggleTip(\${t.id}, \${!t.active})">\${t.active ? 'Pause' : 'Resume'}</button>
+                    </td>
+                </tr>\`).join('') : '<tr><td colspan="7" class="text-muted">No items yet.</td></tr>';
+        }
+        function editTip(id) {
+            const t = tipsData.find(x => x.id === id) || { kind: 'tip', priority: 5, cta_params: {}, conditions: {} };
+            document.getElementById('tipEditorTitle').innerText = id ? 'Edit item #' + id : 'New item';
+            document.getElementById('tip_id').value = id || '';
+            document.getElementById('tip_kind').value = t.kind || 'tip';
+            document.getElementById('tip_title').value = t.title || '';
+            document.getElementById('tip_priority').value = t.priority || 5;
+            document.getElementById('tip_body').value = t.body || '';
+            document.getElementById('tip_cta_label').value = t.cta_label || '';
+            document.getElementById('tip_cta_view').value = t.cta_view || '';
+            document.getElementById('tip_cta_params').value = JSON.stringify(t.cta_params || {});
+            document.getElementById('tip_day_min').value = t.day_min ?? '';
+            document.getElementById('tip_day_max').value = t.day_max ?? '';
+            document.getElementById('tip_season_from').value = (t.season_from || '').slice(0, 10);
+            document.getElementById('tip_season_to').value = (t.season_to || '').slice(0, 10);
+            document.getElementById('tip_conditions').value = JSON.stringify(t.conditions || {});
+            document.getElementById('tipError').innerText = '';
+            document.getElementById('tipEditor').style.display = 'block';
+            document.getElementById('tipEditor').scrollIntoView({ behavior: 'smooth', block: 'center' });
+        }
+        async function saveTip() {
+            const g = (id) => document.getElementById(id).value;
+            const tip = { id: g('tip_id') || null, kind: g('tip_kind'), title: g('tip_title'), priority: g('tip_priority'), body: g('tip_body'), cta_label: g('tip_cta_label'), cta_view: g('tip_cta_view'), cta_params: g('tip_cta_params') || '{}', day_min: g('tip_day_min'), day_max: g('tip_day_max'), season_from: g('tip_season_from'), season_to: g('tip_season_to'), conditions: g('tip_conditions') || '{}', active: true };
+            const cur = tipsData.find(x => String(x.id) === String(tip.id)); if (cur) tip.active = cur.active;
+            const res = await fetch(API_URL + '/tips', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: adminToken, tip }) });
+            const data = await res.json();
+            if (!data.success) { document.getElementById('tipError').innerText = data.error || 'Could not save'; return; }
+            document.getElementById('tipEditor').style.display = 'none';
+            loadTips();
+        }
+        async function toggleTip(id, active) {
+            await fetch(API_URL + '/tips/' + id + '/active', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ token: adminToken, active }) });
+            loadTips();
         }
 
         function escapeHtml(v) { return String(v == null ? '' : v).replace(/[&<>"']/g, c => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c])); }
@@ -1244,6 +1361,20 @@ app.post('/api/super/plan-requests/:id/resolve', auth.requireSuper, async (req, 
         console.error('Resolve request error:', e.message);
         res.status(500).json({ success: false, error: 'Could not update the request' });
     }
+});
+
+// Ideas feed editor (master admin): list with stats, add/edit, pause/resume.
+app.get('/api/super/tips', auth.requireSuper, async (req, res) => {
+    try { res.json({ success: true, tips: await tips.adminList(getPool()), kinds: tips.KINDS, views: tips.VIEWS }); }
+    catch (e) { console.error('Admin tips error:', e.message); res.status(500).json({ success: false, error: 'Could not load tips' }); }
+});
+app.post('/api/super/tips', auth.requireSuper, async (req, res) => {
+    try { res.json({ success: true, tip: await tips.adminSave(getPool(), req.body && req.body.tip) }); }
+    catch (e) { res.status(e.status || 500).json({ success: false, error: e.status ? e.message : 'Could not save the tip' }); }
+});
+app.post('/api/super/tips/:id/active', auth.requireSuper, async (req, res) => {
+    try { res.json({ success: true, tip: await tips.adminSetActive(getPool(), req.params.id, req.body && req.body.active) }); }
+    catch (e) { res.status(e.status || 500).json({ success: false, error: e.status ? e.message : 'Could not update' }); }
 });
 
 app.post('/api/super/delete-store', auth.requireSuper, async (req, res) => {
