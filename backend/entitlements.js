@@ -49,21 +49,6 @@ async function get(db, storeId) {
     return plans.entitlements(row, u);
 }
 
-// One extension per store: +7 days from the later of now and the trial end.
-async function extendTrial(db, storeId) {
-    const row = await loadRow(db, storeId);
-    if (!row) throw Object.assign(new Error('Store not found'), { status: 404 });
-    if (row.trial_extended_at) throw Object.assign(new Error('Your trial was already extended once.'), { status: 400 });
-    await db.query(
-        `UPDATE stores SET trial_extended_at = NOW(),
-            trial_ends_at = GREATEST(NOW(), COALESCE(trial_ends_at, NOW())) + ($2 || ' days')::interval,
-            plan_prompts = COALESCE(plan_prompts, '{}'::jsonb) - 'trial_ended_seen_at'
-         WHERE store_id = $1 AND trial_extended_at IS NULL`,
-        [storeId, String(plans.EXTENSION_DAYS)]
-    );
-    return get(db, storeId);
-}
-
 // Remember that a popup was shown/dismissed. limit_reached is per billing
 // month, trial_ended and tour once.
 async function dismissPrompt(db, storeId, key) {
@@ -80,7 +65,8 @@ async function dismissPrompt(db, storeId, key) {
     return get(db, storeId);
 }
 
-// Super admin: put a store on a plan (and keep monthly_limit readable for old code).
+// Puts a store on a plan (merchant's own choice after the trial, or the super
+// admin); monthly_limit is kept in step for older readers.
 async function setPlan(db, storeId, planKey) {
     const p = plans.byKey(planKey);
     if (!p) throw Object.assign(new Error('Unknown plan'), { status: 400 });
@@ -89,4 +75,4 @@ async function setPlan(db, storeId, planKey) {
     return p;
 }
 
-module.exports = { ensureColumns, loadRow, get, extendTrial, dismissPrompt, setPlan };
+module.exports = { ensureColumns, loadRow, get, dismissPrompt, setPlan };

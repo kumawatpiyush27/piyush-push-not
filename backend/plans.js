@@ -3,16 +3,14 @@
 // An "impression" is one notification delivered to a push service
 // (campaigns + automations, test sends excluded).
 //
-// - Every store gets a 7-day free trial of the Unlimited plan, extendable
-//   once by 7 more days (the merchant leaves a review on the App Store).
-// - After the trial the store is on Free (10,000 impressions a month,
-//   segments locked) unless the super admin moved it to a paid plan
-//   (stores.plan_key). stores.monthly_limit still works as a custom
-//   allowance on top of a plan.
-// - "Upgrade" records a request (plan_requests); there is no automatic billing.
+// - Every store gets a 7-day free trial of the Unlimited plan.
+// - After the trial the merchant picks a plan (stores.plan_key, applied at
+//   once); until they do, the store is on Free (10,000 impressions a month,
+//   segments locked). stores.monthly_limit still works as a custom allowance
+//   on top of a plan. Paid plans also record a plan_request so the team can
+//   follow up on billing; there is no automatic billing.
 
 const TRIAL_DAYS = 7;
-const EXTENSION_DAYS = 7;
 const DAY_MS = 24 * 60 * 60 * 1000;
 // Growth allowance: the brief fixed only the price; change here or via env.
 const GROWTH_LIMIT = parseInt(process.env.GROWTH_IMPRESSIONS || '50000', 10) || 50000;
@@ -40,7 +38,7 @@ function contactEmail() {
     return process.env.UPGRADE_CONTACT_EMAIL || 'hello@retner.ai';
 }
 
-// App Store listing where the merchant leaves the review that extends the trial.
+// App Store listing where the merchant can leave a review.
 function reviewUrl() {
     return process.env.APP_REVIEW_URL || 'https://apps.shopify.com/retner-smartpush-live/reviews';
 }
@@ -71,6 +69,7 @@ function planForLimit(limit) {
 
 // Trial window of a store. trial_started_at is set by entitlements.js the
 // first time a store is seen; until then the trial counts from "now".
+// (Trial extensions were removed on 2026-11-27; the fields stay for old rows.)
 function trialState(row, now) {
     const t = now ? new Date(now) : new Date();
     const r = row || {};
@@ -86,8 +85,7 @@ function trialState(row, now) {
         days_left: daysLeft,
         extended,
         extended_at: r.trial_extended_at ? new Date(r.trial_extended_at).toISOString() : null,
-        can_extend: !extended,
-        extension_days: EXTENSION_DAYS,
+        can_extend: false,
         trial_days: TRIAL_DAYS,
     };
 }
@@ -112,8 +110,10 @@ function entitlements(row, usage, now) {
     const used = Number(u.used || 0);
     const exhausted = limit !== null && used >= limit;
     const periodKey = u.period_start ? new Date(u.period_start).toISOString().slice(0, 10) : null;
+    const selected = !!(row && byKey(row.plan_key));
     return {
-        plan: { key: plan.key, name: plan.name, price: plan.price, currency: plan.currency, limit: plan.limit, unlimited: plan.limit === null, segments: plan.segments, custom_limit: limit !== null && limit !== plan.limit },
+        plan: { key: plan.key, name: plan.name, price: plan.price, currency: plan.currency, limit: plan.limit, unlimited: plan.limit === null, segments: plan.segments, custom_limit: limit !== null && limit !== plan.limit, selected },
+        plan_selected: selected,
         trial,
         segments_unlocked: trial.active || !!plan.segments,
         usage: {
@@ -129,7 +129,8 @@ function entitlements(row, usage, now) {
             resets_on: u.resets_on || null,
         },
         prompts: {
-            trial_ended: !trial.active && !trial.extended && plan.key === 'free' && !prompts.trial_ended_seen_at,
+            // Once after the trial, until the merchant picks a plan.
+            trial_ended: !trial.active && !selected && !prompts.trial_ended_seen_at,
             limit_reached: exhausted && !trial.active && prompts.limit_seen_period !== periodKey,
             tour_done: !!prompts.tour_done_at,
         },
@@ -145,4 +146,4 @@ function mailto(plan, storeId) {
     return `mailto:${contactEmail()}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
 }
 
-module.exports = { PLANS, TRIAL_DAYS, EXTENSION_DAYS, UNLIMITED_SENTINEL, byKey, planForStore, planForLimit, trialState, effectiveLimit, entitlements, contactEmail, reviewUrl, mailto };
+module.exports = { PLANS, TRIAL_DAYS, UNLIMITED_SENTINEL, byKey, planForStore, planForLimit, trialState, effectiveLimit, entitlements, contactEmail, reviewUrl, mailto };

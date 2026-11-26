@@ -665,10 +665,29 @@ app.get('/my-store/entitlements', async (req, res) => {
     try { res.json({ success: true, entitlements: await entitlements.get(getPool(), req.storeId) }); }
     catch (e) { console.error('Entitlements error:', e.message); res.status(e.status || 500).json({ success: false, error: e.status ? e.message : 'Could not load your plan' }); }
 });
-// "Leave a review, get 7 more days": one extension per store.
-app.post('/my-store/trial/extend', async (req, res) => {
-    try { res.json({ success: true, entitlements: await entitlements.extendTrial(getPool(), req.storeId) }); }
-    catch (e) { console.error('Trial extend error:', e.message); res.status(e.status || 500).json({ success: false, error: e.status ? e.message : 'Could not extend the trial' }); }
+// The merchant picks their plan (after, or during, the trial). It applies at
+// once; a paid choice also leaves a plan request so the team follows up on
+// billing (no automatic charge).
+app.post('/my-store/select-plan', async (req, res) => {
+    const plan = plans.byKey(String((req.body && req.body.plan) || ''));
+    if (!plan) return res.status(400).json({ success: false, error: 'Pick a plan first.' });
+    try {
+        const db = getPool();
+        await ensurePlanRequests(db);
+        await entitlements.setPlan(db, req.storeId, plan.key);
+        if (plan.price > 0) {
+            const pending = await pendingPlanRequest(db, req.storeId);
+            if (pending) await db.query('UPDATE plan_requests SET plan = $1, note = $2, created_at = NOW() WHERE id = $3', [plan.key, 'selected by merchant', pending.id]);
+            else await db.query('INSERT INTO plan_requests (store_id, plan, note) VALUES ($1, $2, $3)', [req.storeId, plan.key, 'selected by merchant']);
+        } else {
+            await db.query(`UPDATE plan_requests SET status = 'dismissed', resolved_at = NOW() WHERE store_id = $1 AND status = 'pending'`, [req.storeId]);
+        }
+        const ent = await entitlements.get(db, req.storeId);
+        res.json({ success: true, plan: ent.plan, entitlements: ent, pending_request: await pendingPlanRequest(db, req.storeId), contact_email: plans.contactEmail() });
+    } catch (e) {
+        console.error('Select plan error:', e.message);
+        res.status(e.status || 500).json({ success: false, error: e.status ? e.message : 'Could not change your plan. Please try again.' });
+    }
 });
 // Popup dismissed: trial_ended (once), limit_reached (per month), tour (once).
 app.post('/my-store/prompts/dismiss', async (req, res) => {

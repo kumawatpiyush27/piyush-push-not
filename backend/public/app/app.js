@@ -202,7 +202,7 @@
         $('planBar').className = 'bar' + (pct >= 100 ? ' over' : pct >= 80 ? ' warn' : '');
         $('planBar').firstElementChild.style.width = pct + '%';
         $('planFoot').textContent = (u.limit === null || onTrial) ? (onTrial ? 'Segments and every feature unlocked during the trial' : 'Unlimited impressions') : ((u.resets_on ? 'Resets on ' + new Date(u.resets_on).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) + ' · ' : '') + num(u.remaining) + ' left');
-        $('planBtn').innerHTML = onTrial ? '<i class="fas fa-bolt"></i> See plans' : '<i class="fas fa-bolt"></i> Upgrade plan';
+        $('planBtn').innerHTML = onTrial || !(u.plan && u.plan.selected) ? '<i class="fas fa-bolt"></i> Choose your plan' : '<i class="fas fa-bolt"></i> Change plan';
         bellText = pct >= 80 && !onTrial && u.limit !== null ? 'You have used ' + pct + '% of this month\'s impressions.' : '';
         $('bellDot').classList.toggle('hidden', !bellText);
       } else {
@@ -645,32 +645,32 @@
     if (!tr || !tr.ends_at) { box.classList.add('hidden'); return; }
     box.classList.remove('hidden');
     box.className = 'trial-box' + (tr.active ? '' : ' ended');
+    var review = (ent && ent.review_url) || (planData && planData.review_url) || 'https://apps.shopify.com/retner-smartpush-live/reviews';
     if (tr.active) {
-      box.innerHTML = '<span><i class="fas fa-gift"></i> <b>Free trial:</b> ' + tr.days_left + ' day' + (tr.days_left === 1 ? '' : 's') + ' left, ends ' + esc(dateShort(tr.ends_at)) + '. ' + (tr.extended ? 'This trial was extended once.' : 'Unlimited impressions and segments until then.') + '</span>' +
-        (tr.can_extend ? '<button class="btn sm" type="button" id="extendBtn"><i class="fas fa-star"></i> Leave a review, get +' + tr.extension_days + ' days</button>' : '');
+      box.innerHTML = '<span><i class="fas fa-gift"></i> <b>Free trial:</b> ' + tr.days_left + ' day' + (tr.days_left === 1 ? '' : 's') + ' left, ends ' + esc(dateShort(tr.ends_at)) + '. Unlimited impressions and segments until then; pick the plan you want afterwards below.</span>' +
+        '<a class="btn sm" href="' + esc(review) + '" target="_blank" rel="noopener"><i class="fas fa-star"></i> Leave a review</a>';
     } else {
-      box.innerHTML = '<span><i class="fas fa-hourglass-end"></i> <b>Your free trial ended</b> on ' + esc(dateShort(tr.ends_at)) + '. ' + (tr.extended ? 'It was already extended once; upgrade to keep segments and higher limits.' : 'Leave a review on our app and get ' + tr.extension_days + ' more days free.') + '</span>' +
-        (tr.can_extend ? '<button class="btn sm primary" type="button" id="extendBtn"><i class="fas fa-star"></i> Leave a review &amp; extend</button>' : '');
+      box.innerHTML = '<span><i class="fas fa-hourglass-end"></i> <b>Your free trial ended</b> on ' + esc(dateShort(tr.ends_at)) + '. ' + (p && p.selected ? 'You are on the ' + esc(p.name) + ' plan.' : 'Choose a plan below to keep going.') + '</span>' +
+        '<a class="btn sm" href="' + esc(review) + '" target="_blank" rel="noopener"><i class="fas fa-star"></i> Leave a review</a>';
     }
-    var b = $('extendBtn'); if (b) b.addEventListener('click', function () { extendTrial(b); });
   }
   function renderPending(req) {
     var box = $('planPending');
     if (!req) { box.classList.add('hidden'); box.innerHTML = ''; return; }
     box.classList.remove('hidden');
-    box.innerHTML = '<i class="fas fa-circle-check"></i> <b>' + esc(req.plan_name) + ' plan requested</b> on ' + esc(dateShort(req.created_at)) + '. We will switch your store over and email you' +
-      (req.mailto ? ' — or <a href="' + esc(req.mailto) + '" target="_blank" rel="noopener">email us now</a> to speed it up.' : '.');
+    box.innerHTML = '<i class="fas fa-circle-check"></i> <b>' + esc(req.plan_name) + ' plan selected</b> on ' + esc(dateShort(req.created_at)) + '. It is active now; we will email you about billing' +
+      (req.mailto ? ' — or <a href="' + esc(req.mailto) + '" target="_blank" rel="noopener">email us</a> if you have questions.' : '.');
   }
   function renderTiers() {
     var cur = planData.plan, pending = planData.pending_request;
     var curIdx = planData.plans.findIndex(function (p) { return p.key === cur.key; });
     $('tiers').innerHTML = planData.plans.map(function (p, i) {
+      var onTrial = !!(planData.trial && planData.trial.active);
       var isCur = p.key === cur.key && !cur.custom_limit;
-      var tag = isCur ? 'Current plan' : (p.key === 'growth' && curIdx < 1 ? 'Most popular' : (p.key === 'unlimited' && planData.trial && planData.trial.active ? 'Your trial plan' : ''));
+      var tag = isCur ? (cur.selected ? 'Your plan' : (onTrial ? 'After the trial' : 'Current plan')) : (p.key === 'growth' && curIdx < 1 ? 'Most popular' : (p.key === 'unlimited' && onTrial ? 'Your trial plan' : ''));
       var btn;
-      if (isCur) btn = '<button class="btn block" disabled><i class="fas fa-check"></i> Your current plan</button>';
-      else if (pending && pending.plan === p.key) btn = '<button class="btn block soft" disabled><i class="far fa-clock"></i> Requested</button>';
-      else btn = '<button class="btn block' + (i > curIdx ? ' primary' : '') + '" data-req-plan="' + esc(p.key) + '"><i class="fas fa-bolt"></i> ' + (i > curIdx ? 'Request upgrade' : 'Switch to this plan') + '</button>';
+      if (isCur && cur.selected) btn = '<button class="btn block" disabled><i class="fas fa-check"></i> Selected</button>';
+      else btn = '<button class="btn block' + (i > curIdx || !cur.selected ? ' primary' : '') + '" data-req-plan="' + esc(p.key) + '"><i class="fas fa-check"></i> Select ' + esc(p.name) + '</button>';
       return '<div class="tier' + (isCur ? ' current' : '') + (tag === 'Most popular' ? ' recommended' : '') + '">' + (tag ? '<span class="tag">' + tag + '</span>' : '') +
         '<h3>' + esc(p.name) + '</h3><div class="price">' + (p.price ? usd(p.price) + '<small> / month</small>' : 'Free') + '</div>' +
         '<div class="limit"><i class="fas fa-' + (p.limit === null ? 'infinity' : 'paper-plane') + '"></i> ' + (p.limit === null ? 'Unlimited impressions' : num(p.limit) + ' impressions / month') + '</div>' +
@@ -681,14 +681,13 @@
     var b = e.target.closest('[data-req-plan]'); if (!b || !planData) return;
     var key = b.getAttribute('data-req-plan');
     var p = planData.plans.filter(function (x) { return x.key === key; })[0]; if (!p) return;
-    if (!window.confirm('Request the ' + p.name + ' plan (' + (p.limit === null ? 'unlimited impressions' : num(p.limit) + ' impressions a month') + (p.price ? ', ' + usd(p.price) + '/month' : '') + ')? We will confirm by email before anything is charged.')) return;
-    b.disabled = true; b.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Sending…';
-    api('/my-store/upgrade-request', { method: 'POST', body: { plan: key } }).then(function (r) {
-      if (!r.ok || !r.data.success) { b.disabled = false; b.innerHTML = '<i class="fas fa-bolt"></i> Request upgrade'; return toast(r.data.error || 'Could not send the request.', 'err'); }
-      toast('Request sent. We will email you when ' + p.name + ' is active.', 'ok');
-      planData.pending_request = r.data.request;
-      renderPending(r.data.request); renderTiers();
-      if (r.data.request && r.data.request.mailto) window.open(r.data.request.mailto, '_blank');
+    if (!window.confirm('Select the ' + p.name + ' plan (' + (p.limit === null ? 'unlimited impressions' : num(p.limit) + ' impressions a month') + (p.price ? ', ' + usd(p.price) + '/month' : ', free') + ')?' + (p.price ? ' It applies right away; we will email you about billing, nothing is charged automatically.' : ''))) return;
+    b.disabled = true; b.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving…';
+    api('/my-store/select-plan', { method: 'POST', body: { plan: key } }).then(function (r) {
+      if (!r.ok || !r.data.success) { b.disabled = false; b.innerHTML = '<i class="fas fa-check"></i> Select ' + esc(p.name); return toast(r.data.error || 'Could not change the plan.', 'err'); }
+      toast(p.name + ' plan selected.', 'ok');
+      ent = r.data.entitlements || ent;
+      loadPlan();
     });
   });
 
@@ -740,22 +739,6 @@
     if (ent && ent.prompts) ent.prompts[key] = false;
     return api('/my-store/prompts/dismiss', { method: 'POST', body: { key: key } }).then(function (r) { if (r.ok && r.data.success) ent = r.data.entitlements; });
   }
-  function extendTrial(btn) {
-    if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Extending…'; }
-    var review = (ent && ent.review_url) || 'https://apps.shopify.com/retner-smartpush-live/reviews';
-    window.open(review, '_blank', 'noopener');
-    return api('/my-store/trial/extend', { method: 'POST' }).then(function (r) {
-      if (!r.ok || !r.data.success) { if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-star"></i> Leave a review &amp; extend'; } return toast(r.data.error || 'Could not extend the trial.', 'err'); }
-      ent = r.data.entitlements;
-      closeModal();
-      toast('Thank you! Your trial now runs until ' + dateShort(ent.trial.ends_at) + '.', 'ok');
-      if (current === 'plan') loadPlan();
-      if (current === 'home') loadHome();
-      if (current === 'segments') applySegmentLock();
-      if (current === 'creator') renderSegments();
-    });
-  }
-
   // Generic popup: { icon, tone, title, html, actions: [{ label, primary, onClick }] }
   function showModal(o) {
     $('modalIcon').innerHTML = '<i class="fas ' + (o.icon || 'fa-gift') + '"></i>';
@@ -777,12 +760,13 @@
   document.addEventListener('keydown', function (e) { if (e.key === 'Escape') { closeModal(); closeGuide(); } });
 
   function showTrialEndedModal() {
-    var tr = ent.trial || {};
+    var review = (ent && ent.review_url) || 'https://apps.shopify.com/retner-smartpush-live/reviews';
     showModal({
-      icon: 'fa-gift', title: 'Want to extend the trial by 7 more days?',
-      html: '<p>Your 7-day free trial has ended. Leave a review on our app and get <b>7 more days of free trial</b> (extended version): unlimited impressions and segments, no card needed.</p><span class="pill"><i class="fas fa-star"></i> One review = +' + (tr.extension_days || 7) + ' days</span>',
+      icon: 'fa-hourglass-end', title: 'Your 7-day free trial has ended',
+      html: '<p>Pick the plan you want to continue with: <b>Free</b> (10,000 impressions a month), <b>Growth</b> ($30) or <b>Unlimited</b> ($50). Your subscribers, campaigns and automations are all kept.</p><p>Enjoying Retner? A review on the App Store helps us a lot.</p>',
       actions: [
-        { html: '<i class="fas fa-star"></i> Leave a review &amp; extend my trial', primary: true, onClick: function (b) { extendTrial(b); } },
+        { html: '<i class="fas fa-check"></i> Choose a plan', primary: true, onClick: function () { closeModal(); dismissPrompt('trial_ended'); showView('plan'); } },
+        { html: '<i class="fas fa-star"></i> Leave a review', onClick: function () { window.open(review, '_blank', 'noopener'); } },
         { label: 'Maybe later', onClick: function () { closeModal(); dismissPrompt('trial_ended'); } },
       ],
     });
@@ -828,7 +812,7 @@
     { view: 'subscribers', target: '#view-subscribers .kpis', place: 'below', title: 'Watch your audience grow', text: 'Who subscribed, from which browser, when they were last seen, and how sign-ups grow day by day. The Segments card previews the audiences you can target.' },
     { view: 'segments', target: '#segLockA', place: 'above', title: 'Ready-made segments', text: 'Counted live from visits, carts and orders. Click <b>Send campaign</b> on any segment to open the creator with that audience selected. On the Free plan the counts stay visible and the cards unlock with an upgrade.' },
     { view: 'analytics', target: '#analytics-root .ra2-kpis', place: 'below', title: 'Measure what worked', text: 'Sends, clicks, click rate and attributed revenue over time, plus your best campaigns and automations. Switch tabs for campaigns, automations and the live event feed.' },
-    { view: 'plan', target: '#tiers', place: 'above', title: 'Plans in one place', text: '<b>Free</b> includes 10,000 impressions a month. <b>Growth ($30)</b> adds more and unlocks segments; <b>Unlimited ($50)</b> has no cap. Leave a review on our app to extend your trial once by 7 days.' },
+    { view: 'plan', target: '#tiers', place: 'above', title: 'Plans in one place', text: '<b>Free</b> includes 10,000 impressions a month. <b>Growth ($30)</b> adds more and unlocks segments; <b>Unlimited ($50)</b> has no cap. Pick your plan when the trial ends; it applies right away.' },
     { view: 'settings', target: '#view-settings .settings-grid', place: 'below', title: 'Last step: your branding', text: 'Store name, logo and contact email appear on every notification. Set a dashboard password to sign in here without Shopify. That is the whole product. You can replay this tour any time from <b>Take a tour</b> in the top bar.' },
   ];
   var tourStep = -1, tourTarget = null, tourTimer = null;
