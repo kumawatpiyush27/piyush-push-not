@@ -308,7 +308,7 @@ table.tbl tr:last-child td { border-bottom: 0; }
 .tour-shade { position: absolute; inset: 0; }
 .tour-ring { position: absolute; border-radius: 14px; box-shadow: 0 0 0 9999px rgba(17, 24, 39, .55), 0 0 0 3px var(--primary), 0 0 0 8px rgba(37, 99, 235, .25); transition: top .25s, left .25s, width .25s, height .25s; pointer-events: none; }
 .tour-ring.center { box-shadow: 0 0 0 9999px rgba(17, 24, 39, .55); }
-.tour-card { position: absolute; width: min(360px, calc(100vw - 32px)); background: var(--surface); border-radius: var(--r); box-shadow: var(--sh-lg); padding: 16px 18px 14px; animation: pop .18s ease-out; }
+.tour-card { position: absolute; z-index: 2; width: min(360px, calc(100vw - 32px)); background: var(--surface); border-radius: var(--r); box-shadow: var(--sh-lg); padding: 16px 18px 14px; animation: pop .18s ease-out; }
 .tour-top { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
 .tour-count { font-size: 11.5px; letter-spacing: .5px; text-transform: uppercase; color: var(--primary); font-weight: 700; }
 .tour-skip { border: 0; background: transparent; color: var(--muted); font: inherit; font-size: 12.5px; cursor: pointer; padding: 2px 4px; }
@@ -324,7 +324,6 @@ table.tbl tr:last-child td { border-bottom: 0; }
 .tour-card.below::after { top: -7px; left: 28px; } .tour-card.above::after { bottom: -7px; left: 28px; }
 .tour-card.right::after { left: -7px; top: 24px; } .tour-card.left::after { right: -7px; top: 24px; }
 .tour-card.center::after { display: none; }
-.tour-target { position: relative; z-index: 91 !important; }
 
 /* ---------- settings ---------- */
 .settings-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(360px, 1fr)); gap: 20px; max-width: 980px; }

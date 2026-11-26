@@ -808,12 +808,12 @@
     { view: 'creator', target: '#segGrid', place: 'right', title: 'Choose who gets it', text: 'Send to everyone or to a segment such as <b>added to cart</b> or <b>inactive 30+ days</b>. Counts are live. Segments are included in Growth, Unlimited and your trial.' },
     { view: 'creator', target: '#testBtn', place: 'above', title: 'Test it on your own device', text: 'Sends the draft to this browser only, marked [Test], so you see exactly what shoppers will see before anything goes out. Test sends never count against your plan.' },
     { view: 'creator', target: '#btnSend', place: 'above', title: 'Send now or schedule', text: 'Send immediately or pick a date and time. Flash sales can have an end time so late shoppers are not notified about an offer that is over.' },
-    { view: 'automations', target: '#automations-root .ra-grid', place: 'below', title: 'Automations run on their own', text: 'Turn on <b>Welcome</b> first (greets every new subscriber), then <b>Cart recovery</b> with a delay and discount. Browse abandonment, win-back, order thank-you, price drop and back-in-stock each have their own text, timing and test button.' },
+    { view: 'automations', target: '#automations-root .ra-grid .ra-auto', place: 'right', title: 'Automations run on their own', text: 'Turn on <b>Welcome</b> first (greets every new subscriber), then <b>Cart recovery</b> with a delay and discount. Browse abandonment, win-back, order thank-you, price drop and back-in-stock each have their own text, timing and test button.' },
     { view: 'subscribers', target: '#view-subscribers .kpis', place: 'below', title: 'Watch your audience grow', text: 'Who subscribed, from which browser, when they were last seen, and how sign-ups grow day by day. The Segments card previews the audiences you can target.' },
-    { view: 'segments', target: '#segLockA', place: 'above', title: 'Ready-made segments', text: 'Counted live from visits, carts and orders. Click <b>Send campaign</b> on any segment to open the creator with that audience selected. On the Free plan the counts stay visible and the cards unlock with an upgrade.' },
+    { view: 'segments', target: '#segBehaviour .seg-tile', place: 'right', title: 'Ready-made segments', text: 'Counted live from visits, carts and orders. Click <b>Send campaign</b> on any segment to open the creator with that audience selected. On the Free plan the counts stay visible and the cards unlock with an upgrade.' },
     { view: 'analytics', target: '#analytics-root .ra2-kpis', place: 'below', title: 'Measure what worked', text: 'Sends, clicks, click rate and attributed revenue over time, plus your best campaigns and automations. Switch tabs for campaigns, automations and the live event feed.' },
-    { view: 'plan', target: '#tiers', place: 'above', title: 'Plans in one place', text: '<b>Free</b> includes 10,000 impressions a month. <b>Growth ($30)</b> adds more and unlocks segments; <b>Unlimited ($50)</b> has no cap. Pick your plan when the trial ends; it applies right away.' },
-    { view: 'settings', target: '#view-settings .settings-grid', place: 'below', title: 'Last step: your branding', text: 'Store name, logo and contact email appear on every notification. Set a dashboard password to sign in here without Shopify. That is the whole product. You can replay this tour any time from <b>Take a tour</b> in the top bar.' },
+    { view: 'plan', target: '#tiers .tier.recommended, #tiers .tier', place: 'left', title: 'Plans in one place', text: '<b>Free</b> includes 10,000 impressions a month. <b>Growth ($30)</b> adds more and unlocks segments; <b>Unlimited ($50)</b> has no cap. Pick your plan when the trial ends; it applies right away.' },
+    { view: 'settings', target: '#view-settings .settings-grid .card', place: 'right', title: 'Last step: your branding', text: 'Store name, logo and contact email appear on every notification. Set a dashboard password to sign in here without Shopify. That is the whole product. You can replay this tour any time from <b>Take a tour</b> in the top bar.' },
   ];
   var tourStep = -1, tourTarget = null, tourTimer = null;
   function tourKey() { return 'tour_done_' + (window.store && window.store.id); }
@@ -825,7 +825,6 @@
   }
   function endTour(finished) {
     clearTimeout(tourTimer);
-    if (tourTarget) tourTarget.classList.remove('tour-target');
     tourTarget = null; tourStep = -1;
     $('tour').classList.add('hidden');
     try { localStorage.setItem(tourKey(), '1'); } catch (e) { /* ignore */ }
@@ -841,7 +840,7 @@
   function tourShow() {
     var st = TOUR[tourStep]; if (!st) return endTour(true);
     clearTimeout(tourTimer);
-    if (tourTarget) { tourTarget.classList.remove('tour-target'); tourTarget = null; }
+    tourTarget = null;
     if (current !== st.view) showView(st.view);
     $('tourCount').textContent = 'Step ' + (tourStep + 1) + ' of ' + TOUR.length;
     $('tourTitle').textContent = st.title;
@@ -851,7 +850,7 @@
     $('tourNext').innerHTML = tourStep === TOUR.length - 1 ? '<i class="fas fa-check"></i> Finish' : 'Next <i class="fas fa-arrow-right"></i>';
     waitFor(st.target, 15, function (el) {
       tourTarget = el;
-      if (el) { el.classList.add('tour-target'); try { el.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (e) { el.scrollIntoView(); } }
+      if (el) { try { el.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (e) { el.scrollIntoView(); } }
       tourTimer = setTimeout(tourPlace, el ? 320 : 0);
     });
   }
@@ -871,8 +870,9 @@
     var w = Math.min(vw, r.width + pad * 2), h = Math.min(vh, r.height + pad * 2);
     ring.className = 'tour-ring'; ring.style.cssText = 'top:' + top + 'px;left:' + left + 'px;width:' + w + 'px;height:' + h + 'px;';
     var cw = card.offsetWidth, ch = card.offsetHeight, gap = 14, place = st.place || 'below';
-    var fits = { below: top + h + gap + ch < vh, above: top - gap - ch > 0, right: left + w + gap + cw < vw, left: left - gap - cw > 0 };
-    if (!fits[place]) place = fits.below ? 'below' : fits.above ? 'above' : fits.right ? 'right' : fits.left ? 'left' : 'center';
+    // A placement "fits" when the whole card stays on screen beside the ring.
+    var fits = { below: top + h + gap + ch < vh - 16, above: top - gap - ch > 16, right: left + w + gap + cw < vw - 16, left: left - gap - cw > 16 };
+    if (!fits[place]) place = fits.right ? 'right' : fits.left ? 'left' : fits.below ? 'below' : fits.above ? 'above' : 'center';
     var x, y;
     if (place === 'below') { x = left; y = top + h + gap; }
     else if (place === 'above') { x = left; y = top - gap - ch; }
@@ -880,6 +880,8 @@
     else if (place === 'left') { x = left - gap - cw; y = top; }
     else { x = (vw - cw) / 2; y = (vh - ch) / 2; }
     x = Math.min(Math.max(16, x), vw - cw - 16); y = Math.min(Math.max(16, y), vh - ch - 16);
+    // If the ring is so big that nothing fits, shade the page and show the card centred on top of it.
+    if (place === 'center') { ring.className = 'tour-ring center'; ring.style.cssText = 'top:50%;left:50%;width:0;height:0;'; }
     card.className = 'tour-card ' + place; card.style.left = x + 'px'; card.style.top = y + 'px';
   }
   $('tourNext').addEventListener('click', function () { if (tourStep >= TOUR.length - 1) return endTour(true); tourStep++; tourShow(); });
