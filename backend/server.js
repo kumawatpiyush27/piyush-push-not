@@ -445,6 +445,16 @@ app.get('/store-admin', async (req, res) => {
 app.use('/my-store', auth.requireStore);
 
 // Image upload: raw JPG/PNG/WebP body (the dashboard resizes it first).
+// Images this store uploaded before (campaign heroes, icons, logos), newest first.
+app.get('/my-store/media', async (req, res) => {
+    try {
+        res.json({ success: true, images: await media.listImages(getPool(), req.storeId, req.query.limit) });
+    } catch (e) {
+        console.error('Media list error:', e.message);
+        res.status(500).json({ success: false, images: [], error: 'Could not load your images.' });
+    }
+});
+
 app.post('/my-store/media', express.raw({ type: ['image/jpeg', 'image/png', 'image/webp'], limit: '2560kb' }), async (req, res) => {
     try {
         if (!Buffer.isBuffer(req.body) || !req.body.length) {

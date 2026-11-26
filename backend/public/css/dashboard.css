@@ -135,6 +135,23 @@ button:focus-visible, .menu-item:focus-visible, [role=button]:focus-visible { ou
 .rm-btn:hover { background: #f3f4f6; }
 .rm-danger { color: var(--err); border-color: #fecaca; }
 .rm-error { margin-top: 6px; font-size: 12.5px; color: var(--err); }
+/* picker tabs: upload / image link / library */
+.rm-tabs { display: flex; gap: 6px; flex-wrap: wrap; margin-bottom: 8px; }
+.rm-tab { background: #fff; border: 1px solid #d1d5db; border-radius: 999px; padding: 5px 11px; font: inherit; font-size: 12.5px; font-weight: 600; cursor: pointer; color: #374151; }
+.rm-tab.on { background: var(--primary); border-color: var(--primary); color: #fff; }
+.rm-tab.rm-cancel { margin-left: auto; color: var(--text-sub); }
+.rm-pane { border: 1px solid var(--border); border-radius: 10px; padding: 12px; background: #fff; }
+.rm-label { display: block; font-size: 12.5px; font-weight: 600; margin-bottom: 6px; }
+.rm-row { display: flex; gap: 8px; }
+.rm-input { flex: 1; min-width: 0; border: 1px solid #d1d5db; border-radius: 8px; padding: 8px 10px; font: inherit; }
+.rm-primary { background: var(--primary); border-color: var(--primary); color: #fff; white-space: nowrap; }
+.rm-primary:hover { background: var(--primary-hover, #1d4ed8); }
+.rm-lib { display: grid; grid-template-columns: repeat(auto-fill, minmax(96px, 1fr)); gap: 8px; max-height: 260px; overflow-y: auto; margin-bottom: 8px; }
+.rm-thumb { border: 2px solid transparent; border-radius: 8px; padding: 0; background: #f3f4f6; cursor: pointer; overflow: hidden; display: flex; flex-direction: column; font: inherit; }
+.rm-thumb:hover, .rm-thumb:focus-visible { border-color: var(--primary); }
+.rm-thumb img { width: 100%; aspect-ratio: 3 / 2; object-fit: cover; display: block; }
+.rm-thumb span { font-size: 11px; color: var(--text-sub); padding: 3px 6px; text-transform: capitalize; }
+.rm-lib-loading { color: var(--text-sub); font-size: 13px; }
 .rm-url { margin-top: 6px; font-size: 12.5px; color: var(--text-sub); }
 .rm-url summary { cursor: pointer; }
 .rm-url input { margin-top: 6px; width: 100%; box-sizing: border-box; border: 1px solid #d1d5db; border-radius: 8px; padding: 8px 10px; font: inherit; }

@@ -110,4 +110,13 @@ async function loadImage(db, id) {
     return rows[0] || null;
 }
 
-module.exports = { MAX_BYTES, EXT, detectType, inspectImage, saveImage, loadImage, publicUrl };
+// Recent images of a store for the "choose from library" picker (no bytes).
+async function listImages(db, storeId, limit) {
+    const { rows } = await db.query(
+        'SELECT id, mime, width, height, size, purpose, created_at FROM push_media WHERE store_id = $1 ORDER BY created_at DESC LIMIT $2',
+        [storeId, Math.min(200, Math.max(1, Number(limit) || 60))]
+    );
+    return rows.map((r) => ({ id: r.id, url: publicUrl(r.id, r.mime), mime: r.mime, width: r.width, height: r.height, size: r.size, purpose: r.purpose, created_at: r.created_at }));
+}
+
+module.exports = { MAX_BYTES, EXT, detectType, inspectImage, saveImage, loadImage, listImages, publicUrl };

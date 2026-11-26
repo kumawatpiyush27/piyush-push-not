@@ -1,7 +1,8 @@
-/* Retner image uploader: drag & drop / click, preview, replace, remove.
- * Accepts JPG, PNG, WebP up to 10 MB, resizes in the browser (keeps
- * transparency as PNG, otherwise JPEG) so uploads stay under 2 MB, then
- * uploads to /my-store/media. Usage:
+/* Retner image picker: three ways to add an image — upload (drag & drop /
+ * click), paste an image link, or choose one uploaded before (library from
+ * GET /my-store/media). Uploads are resized in the browser (keeps
+ * transparency as PNG, otherwise JPEG) so they stay under 2 MB, then go to
+ * POST /my-store/media. Usage:
  *   RetnerMedia.create(el, { value, purpose, maxSide, hint, onChange(url) })
  *   RetnerMedia.attachAll(root)  // for <div data-media-for="inputId">
  */
@@ -73,9 +74,21 @@
     }
   }
 
+  // Library shared by every picker on the page; reloaded after an upload.
+  var library = { items: null, loading: null };
+  function loadLibrary(force) {
+    if (library.items && !force) return Promise.resolve(library.items);
+    if (library.loading && !force) return library.loading;
+    library.loading = fetch('/my-store/media?limit=60').then(function (r) { return r.json(); }).then(function (d) {
+      library.items = (d && d.images) || [];
+      return library.items;
+    }).catch(function () { library.items = []; return library.items; });
+    return library.loading;
+  }
+
   function create(el, opts) {
     opts = opts || {};
-    var state = { value: opts.value || '', busy: false, error: '', info: '' };
+    var state = { value: opts.value || '', busy: false, error: '', info: '', mode: 'upload', choosing: false, previous: '' };
     var maxSide = opts.maxSide || 1440;
     var hint = opts.hint || '';
 
@@ -95,11 +108,32 @@
           '<button type="button" class="rm-btn rm-danger" data-rm="remove"><i class="fas fa-trash"></i> Remove</button></div></div></div>' + errorHtml +
           '<input type="file" accept="image/jpeg,image/png,image/webp" hidden>';
       } else {
-        el.innerHTML = '<div class="rm-zone" tabindex="0" role="button" aria-label="Upload image">' +
-          '<i class="fas fa-cloud-arrow-up"></i><div><b>Drag & drop</b> an image or <span class="rm-link">browse</span></div>' +
-          '<div class="rm-hint">JPG, PNG or WebP · up to 10 MB' + (hint ? ' · ' + esc(hint) : '') + '</div></div>' + errorHtml +
-          '<details class="rm-url"><summary>or paste an image link</summary><input type="url" placeholder="https://…" data-rm="url"></details>' +
+        var tabs = [['upload', 'fa-cloud-arrow-up', 'Upload'], ['link', 'fa-link', 'Image link'], ['library', 'fa-images', 'Choose from library']];
+        var body;
+        if (state.mode === 'link') {
+          body = '<div class="rm-pane"><label class="rm-label">Paste the image address (https://…)</label>' +
+            '<div class="rm-row"><input type="url" placeholder="https://yourstore.com/images/offer.jpg" data-rm="url" class="rm-input">' +
+            '<button type="button" class="rm-btn rm-primary" data-rm="use-url"><i class="fas fa-check"></i> Use link</button></div>' +
+            '<div class="rm-hint">Must be a public https link to a JPG, PNG or WebP image' + (hint ? ' · ' + esc(hint) : '') + '.</div></div>';
+        } else if (state.mode === 'library') {
+          var items = library.items;
+          if (!items) body = '<div class="rm-pane rm-lib-loading"><i class="fas fa-spinner fa-spin"></i> Loading your images…</div>';
+          else if (!items.length) body = '<div class="rm-pane"><div class="rm-hint">No images yet. Upload one and it will appear here next time.</div></div>';
+          else body = '<div class="rm-pane"><div class="rm-lib">' + items.map(function (it) {
+            return '<button type="button" class="rm-thumb" data-rm="pick" data-url="' + esc(it.url) + '" title="' + esc((it.purpose || 'image') + ' · ' + (it.width || '?') + '×' + (it.height || '?')) + '">' +
+              '<img src="' + esc(it.url) + '" alt="" loading="lazy"><span>' + esc(it.purpose || 'image') + '</span></button>';
+          }).join('') + '</div><div class="rm-hint">Images you uploaded before, newest first' + (hint ? ' · ' + esc(hint) : '') + '.</div></div>';
+        } else {
+          body = '<div class="rm-zone" tabindex="0" role="button" aria-label="Upload image">' +
+            '<i class="fas fa-cloud-arrow-up"></i><div><b>Drag & drop</b> an image or <span class="rm-link">browse</span></div>' +
+            '<div class="rm-hint">JPG, PNG or WebP · up to 10 MB' + (hint ? ' · ' + esc(hint) : '') + '</div></div>';
+        }
+        el.innerHTML = '<div class="rm-tabs" role="tablist">' + tabs.map(function (t) {
+          return '<button type="button" role="tab" class="rm-tab' + (state.mode === t[0] ? ' on' : '') + '" data-rm="mode" data-mode="' + t[0] + '" aria-selected="' + (state.mode === t[0]) + '"><i class="fas ' + t[1] + '"></i> ' + t[2] + '</button>';
+        }).join('') + (state.choosing ? '<button type="button" class="rm-tab rm-cancel" data-rm="cancel"><i class="fas fa-xmark"></i> Keep current</button>' : '') + '</div>' +
+          body + errorHtml +
           '<input type="file" accept="image/jpeg,image/png,image/webp" hidden>';
+        if (state.mode === 'library' && !library.items) loadLibrary().then(function () { if (state.mode === 'library' && !state.value) render(); });
       }
     }
 
@@ -107,6 +141,8 @@
       state.value = url || '';
       state.info = info || '';
       state.error = '';
+      state.choosing = false;
+      state.previous = '';
       render();
       if (opts.onChange) opts.onChange(state.value);
     }
@@ -128,6 +164,7 @@
         try { data = await res.json(); } catch (e) { data = {}; }
         state.busy = false;
         if (!res.ok || !data.success) throw new Error(data.error || (res.status === 413 ? 'Image is too large.' : 'Upload failed. Please try again.'));
+        library.items = null; // the new image belongs in the library
         set(data.url, file.name + ' · ' + data.width + '×' + data.height + ' · ' + kb(data.size));
       } catch (err) {
         state.busy = false;
@@ -136,10 +173,23 @@
       }
     }
 
+    function useUrl() {
+      var inp = el.querySelector('[data-rm="url"]');
+      var u = inp ? inp.value.trim() : '';
+      if (!u) { state.error = 'Paste an image link first.'; render(); return; }
+      if (!/^https:\/\/.{3,490}$/.test(u)) { state.error = 'Please use a link that starts with https://'; render(); return; }
+      set(u, 'Image link');
+    }
     el.addEventListener('click', function (e) {
       var t = e.target.closest('[data-rm]');
-      if (t && t.getAttribute('data-rm') === 'remove') { e.preventDefault(); set(''); return; }
-      if ((t && t.getAttribute('data-rm') === 'replace') || e.target.closest('.rm-zone')) {
+      var kind = t ? t.getAttribute('data-rm') : '';
+      if (kind === 'remove') { e.preventDefault(); set(''); return; }
+      if (kind === 'replace') { e.preventDefault(); state.previous = state.value; state.value = ''; state.choosing = true; state.error = ''; render(); return; }
+      if (kind === 'cancel') { e.preventDefault(); state.value = state.previous; state.choosing = false; state.previous = ''; render(); return; }
+      if (kind === 'mode') { e.preventDefault(); state.mode = t.getAttribute('data-mode'); state.error = ''; render(); return; }
+      if (kind === 'use-url') { e.preventDefault(); useUrl(); return; }
+      if (kind === 'pick') { e.preventDefault(); set(t.getAttribute('data-url'), 'From your library'); return; }
+      if (e.target.closest('.rm-zone')) {
         e.preventDefault();
         var input = el.querySelector('input[type=file]');
         if (input) input.click();
@@ -153,12 +203,9 @@
     });
     el.addEventListener('change', function (e) {
       if (e.target.type === 'file') handleFile(e.target.files && e.target.files[0]);
-      if (e.target.getAttribute('data-rm') === 'url') {
-        var u = e.target.value.trim();
-        if (!u) return;
-        if (!/^https:\/\/.{3,490}$/.test(u)) { state.error = 'Please use a link that starts with https://'; render(); return; }
-        set(u, 'Image link');
-      }
+    });
+    el.addEventListener('keydown', function (e) {
+      if (e.key === 'Enter' && e.target.getAttribute('data-rm') === 'url') { e.preventDefault(); useUrl(); }
     });
     ['dragenter', 'dragover'].forEach(function (ev) {
       el.addEventListener(ev, function (e) { e.preventDefault(); var z = el.querySelector('.rm-zone, .rm-preview'); if (z) z.classList.add('rm-over'); });
@@ -173,7 +220,7 @@
 
     render();
     return {
-      setValue: function (url) { state.value = url || ''; state.info = ''; state.error = ''; render(); },
+      setValue: function (url) { state.value = url || ''; state.info = ''; state.error = ''; state.choosing = false; state.previous = ''; render(); },
       getValue: function () { return state.value; },
     };
   }

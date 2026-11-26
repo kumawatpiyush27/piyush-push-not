@@ -152,6 +152,8 @@
     var q = params.get('view');
     // ?segment=key (from the Shopify app's Segments page) preselects the audience.
     if (params.get('segment')) pendingSegment = params.get('segment');
+    // ?tour=1 (from the Shopify app) replays the guided tour.
+    if (params.get('tour')) window.__startTour = true;
     var h = window.location.hash.replace('#', '');
     showView(q || h || 'home', { silent: !!h });
   }
@@ -805,64 +807,104 @@
     if (!ent) return;
     if (ent.prompts && ent.prompts.trial_ended) return showTrialEndedModal();
     if (ent.prompts && ent.prompts.limit_reached) return showUpgradeModal('limit');
-    var seen = false; try { seen = !!localStorage.getItem('guide_seen_' + window.store.id); } catch (e) { /* ignore */ }
-    if (!seen && !(ent.prompts && ent.prompts.tour_done)) openGuide();
+    var seen = false; try { seen = !!localStorage.getItem(tourKey()); } catch (e) { /* ignore */ }
+    if (window.__startTour || (!seen && !(ent.prompts && ent.prompts.tour_done))) { window.__startTour = false; startTour(0); }
   }
 
-  // ------------------------------------------------------------ step guide (side drawer)
-  var GUIDE = [
-    { view: 'settings', title: 'Turn Retner on in your theme', desc: 'One switch in the theme editor.', body: 'Shoppers only see the subscribe prompt once the app embed is on. Open <b>Shopify admin → Online Store → Themes → Customize → App embeds</b> and switch on <b>Retner SmartPush</b>. Then set your store name, logo and contact email here in Settings: they appear on every notification.' },
-    { view: 'home', title: 'Read the Home page', desc: 'Subscribers, sends, clicks and revenue at a glance.', body: 'The four tiles compare the last 7, 30 or 90 days with the period before. The Activity chart switches between sent, clicks and subscribers. The plan card shows your trial or monthly impressions, and Quick actions jump to the pages you use most.' },
-    { view: 'creator', title: 'Send your first campaign', desc: 'Title, message, link, images, buttons, audience, schedule.', body: 'Start from a template or write your own. Keep the title under 50 and the message under 120 characters. Add a hero image (2:1) and up to two buttons, pick an audience, then <b>Send test to me</b> to see it on your own device before you send or schedule it.<ul><li>Flash sales can have an end time.</li><li>Click tracking and UTM tags are added for you, so revenue shows up in Analytics.</li></ul>' },
-    { view: 'campaigns', title: 'Track campaigns', desc: 'Sent and scheduled, with delivery and click counts.', body: 'Every campaign you sent or scheduled is listed here with delivered counts, click rate and revenue. Scheduled campaigns can be cancelled until they go out; <b>Process pending</b> sends anything due right now.' },
-    { view: 'automations', title: 'Switch on automations', desc: 'Welcome, abandoned cart, browse abandonment, win-back and more.', body: 'Automations send themselves. Turn on <b>Welcome</b> first (it greets every new subscriber), then <b>Abandoned cart</b> with a delay and an optional discount. Browse abandonment, win-back, order thank-you, price drop and back-in-stock each have their own copy, timing and test button.' },
-    { view: 'subscribers', title: 'Watch your subscribers grow', desc: 'Growth chart, latest subscribers, device mix.', body: 'See who subscribed, from which browser, and when they were last seen. The growth chart shows daily sign-ups; the Segments card on the right previews the audiences you can target.' },
-    { view: 'segments', title: 'Target with segments', desc: 'Ready-made audiences from live behaviour.', body: 'Segments are counted live from visits, carts and orders: active this week, added to cart, bought recently, inactive 30+ days, and by browser. Pick one and click <b>Send campaign</b> to open the creator with that audience selected. Segments are included in the Growth and Unlimited plans and during your trial.' },
-    { view: 'analytics', title: 'Measure results', desc: 'Delivery, clicks, revenue, best campaigns.', body: 'Analytics shows sends, clicks, click rate and attributed revenue over time, plus your best-performing campaigns and automations. Revenue comes from orders placed after a notification click.' },
-    { view: 'plan', title: 'Know your plan', desc: 'Free trial, impressions and upgrades.', body: 'Every store starts with a <b>7-day free trial</b> of Unlimited. After that the <b>Free</b> plan includes 10,000 impressions a month; <b>Growth</b> ($30) and <b>Unlimited</b> ($50) add more impressions and unlock segments. Leave a review on our app to extend the trial once by 7 days.' },
+  // ------------------------------------------------------------ guided tour (spotlight, next → next)
+  // Each step opens the right view, waits for its target, highlights it and
+  // explains it. Progress is per store in localStorage; finishing (or
+  // skipping) tells the server so it does not auto-start again.
+  var TOUR = [
+    { view: 'home', target: '#topnav', place: 'below', title: 'Welcome to Retner SmartPush', text: 'This short tour shows every feature, one step at a time. These tabs are the whole product: <b>Home, Campaigns, Automations, Subscribers, Segments, Analytics</b> and <b>Plan</b>. Click Next to continue.' },
+    { view: 'home', target: '#view-home .kpis', place: 'below', title: 'Your numbers at a glance', text: 'Subscribers, notifications sent, clicks and revenue for the last 7, 30 or 90 days, compared with the period before. Revenue comes from orders placed after a notification click.' },
+    { view: 'home', target: '#planCard', place: 'left', title: 'Your plan and free trial', text: 'Every store starts with a <b>7-day free trial</b> of Unlimited. Here you see days left, impressions used this month and the upgrade button when the Free plan limit is near.' },
+    { view: 'creator', target: '#campTitle', place: 'right', title: 'Step 1 of a campaign: write it', text: 'Pick a template or write your own. Keep the <b>title under 50</b> and the <b>message under 120 characters</b> so nothing is cut off on phones. The preview on the right updates as you type.' },
+    { view: 'creator', target: '[data-media-for="campImg"]', place: 'right', title: 'Add images three ways', text: '<b>Upload</b> a file, paste an <b>image link</b>, or <b>choose from your library</b> of images uploaded before. A 2:1 hero image shows on Android and Windows; the icon shows everywhere.' },
+    { view: 'creator', target: '#segGrid', place: 'right', title: 'Choose who gets it', text: 'Send to everyone or to a segment such as <b>added to cart</b> or <b>inactive 30+ days</b>. Counts are live. Segments are included in Growth, Unlimited and your trial.' },
+    { view: 'creator', target: '#testBtn', place: 'above', title: 'Test it on your own device', text: 'Sends the draft to this browser only, marked [Test], so you see exactly what shoppers will see before anything goes out. Test sends never count against your plan.' },
+    { view: 'creator', target: '#btnSend', place: 'above', title: 'Send now or schedule', text: 'Send immediately or pick a date and time. Flash sales can have an end time so late shoppers are not notified about an offer that is over.' },
+    { view: 'automations', target: '#automations-root .ra-grid', place: 'below', title: 'Automations run on their own', text: 'Turn on <b>Welcome</b> first (greets every new subscriber), then <b>Cart recovery</b> with a delay and discount. Browse abandonment, win-back, order thank-you, price drop and back-in-stock each have their own text, timing and test button.' },
+    { view: 'subscribers', target: '#view-subscribers .kpis', place: 'below', title: 'Watch your audience grow', text: 'Who subscribed, from which browser, when they were last seen, and how sign-ups grow day by day. The Segments card previews the audiences you can target.' },
+    { view: 'segments', target: '#segLockA', place: 'above', title: 'Ready-made segments', text: 'Counted live from visits, carts and orders. Click <b>Send campaign</b> on any segment to open the creator with that audience selected. On the Free plan the counts stay visible and the cards unlock with an upgrade.' },
+    { view: 'analytics', target: '#analytics-root .ra2-kpis', place: 'below', title: 'Measure what worked', text: 'Sends, clicks, click rate and attributed revenue over time, plus your best campaigns and automations. Switch tabs for campaigns, automations and the live event feed.' },
+    { view: 'plan', target: '#tiers', place: 'above', title: 'Plans in one place', text: '<b>Free</b> includes 10,000 impressions a month. <b>Growth ($30)</b> adds more and unlocks segments; <b>Unlimited ($50)</b> has no cap. Leave a review on our app to extend your trial once by 7 days.' },
+    { view: 'settings', target: '#view-settings .settings-grid', place: 'below', title: 'Last step: your branding', text: 'Store name, logo and contact email appear on every notification. Set a dashboard password to sign in here without Shopify. That is the whole product. You can replay this tour any time from <b>Take a tour</b> in the top bar.' },
   ];
-  var guideStep = 0;
-  function renderGuide() {
-    var done = {}; try { done = JSON.parse(localStorage.getItem('guide_done_' + window.store.id) || '{}'); } catch (e) { done = {}; }
-    $('guideSteps').innerHTML = GUIDE.map(function (g, i) {
-      return '<li class="guide-step' + (i === guideStep ? ' on' : '') + (done[i] ? ' done' : '') + '" data-step="' + i + '"><span class="n">' + (done[i] ? '<i class="fas fa-check"></i>' : (i + 1)) + '</span><div><b>Step ' + (i + 1) + ': ' + esc(g.title) + '</b><span>' + esc(g.desc) + '</span>' +
-        '<div class="body">' + g.body + '<button class="btn sm primary" type="button" data-guide-open="' + esc(g.view) + '"><i class="fas fa-arrow-up-right-from-square"></i> Open this page</button></div></div></li>';
-    }).join('');
-    var n = Object.keys(done).length;
-    $('guideBar').style.width = Math.round((n / GUIDE.length) * 100) + '%';
-    $('guideCount').textContent = n + ' of ' + GUIDE.length + ' steps done · step ' + (guideStep + 1) + ' of ' + GUIDE.length;
-    $('guidePrev').disabled = guideStep === 0;
-    $('guideNext').innerHTML = guideStep === GUIDE.length - 1 ? '<i class="fas fa-check"></i> Finish' : 'Next <i class="fas fa-arrow-right"></i>';
-    var on = $('guideSteps').querySelector('.on'); if (on && on.scrollIntoView) on.scrollIntoView({ block: 'nearest' });
+  var tourStep = -1, tourTarget = null, tourTimer = null;
+  function tourKey() { return 'tour_done_' + (window.store && window.store.id); }
+  function tourActive() { return tourStep >= 0; }
+  function startTour(from) {
+    tourStep = typeof from === 'number' ? from : 0;
+    $('tour').classList.remove('hidden');
+    tourShow();
   }
-  function markGuideDone(i) {
-    var done = {}; try { done = JSON.parse(localStorage.getItem('guide_done_' + window.store.id) || '{}'); } catch (e) { done = {}; }
-    done[i] = true;
-    try { localStorage.setItem('guide_done_' + window.store.id, JSON.stringify(done)); } catch (e) { /* ignore */ }
-    if (Object.keys(done).length >= GUIDE.length && !(ent && ent.prompts && ent.prompts.tour_done)) dismissPrompt('tour');
+  function endTour(finished) {
+    clearTimeout(tourTimer);
+    if (tourTarget) tourTarget.classList.remove('tour-target');
+    tourTarget = null; tourStep = -1;
+    $('tour').classList.add('hidden');
+    try { localStorage.setItem(tourKey(), '1'); } catch (e) { /* ignore */ }
+    if (!(ent && ent.prompts && ent.prompts.tour_done)) dismissPrompt('tour');
+    if (finished) toast('Tour finished. Replay it any time from "Take a tour".', 'ok');
   }
-  function openGuide() {
-    try { localStorage.setItem('guide_seen_' + window.store.id, '1'); } catch (e) { /* ignore */ }
-    var idx = GUIDE.findIndex(function (g) { return g.view === current; });
-    if (idx >= 0) guideStep = idx;
-    renderGuide();
-    $('guideWrap').classList.remove('hidden');
+  // Waits until the step's target exists (views load their content asynchronously).
+  function waitFor(selector, tries, cb) {
+    var el = document.querySelector(selector);
+    if (el || tries <= 0) return cb(el);
+    tourTimer = setTimeout(function () { waitFor(selector, tries - 1, cb); }, 120);
   }
-  function closeGuide() { $('guideWrap').classList.add('hidden'); }
-  $('guideClose').addEventListener('click', closeGuide);
-  $('guideBackdrop').addEventListener('click', closeGuide);
-  $('guidePrev').addEventListener('click', function () { if (guideStep > 0) { guideStep--; renderGuide(); } });
-  $('guideNext').addEventListener('click', function () {
-    markGuideDone(guideStep);
-    if (guideStep < GUIDE.length - 1) { guideStep++; renderGuide(); }
-    else { closeGuide(); toast('You have seen every feature. Open the guide any time from the top bar.', 'ok'); }
-  });
-  $('guideSteps').addEventListener('click', function (e) {
-    var o = e.target.closest('[data-guide-open]');
-    if (o) { markGuideDone(guideStep); showView(o.getAttribute('data-guide-open')); if (window.innerWidth < 900) closeGuide(); renderGuide(); return; }
-    var li = e.target.closest('[data-step]');
-    if (li) { guideStep = parseInt(li.getAttribute('data-step'), 10) || 0; renderGuide(); }
-  });
+  function tourShow() {
+    var st = TOUR[tourStep]; if (!st) return endTour(true);
+    clearTimeout(tourTimer);
+    if (tourTarget) { tourTarget.classList.remove('tour-target'); tourTarget = null; }
+    if (current !== st.view) showView(st.view);
+    $('tourCount').textContent = 'Step ' + (tourStep + 1) + ' of ' + TOUR.length;
+    $('tourTitle').textContent = st.title;
+    $('tourText').innerHTML = st.text;
+    $('tourDots').innerHTML = TOUR.map(function (_, i) { return '<span class="' + (i < tourStep ? 'done' : i === tourStep ? 'on' : '') + '"></span>'; }).join('');
+    $('tourPrev').disabled = tourStep === 0;
+    $('tourNext').innerHTML = tourStep === TOUR.length - 1 ? '<i class="fas fa-check"></i> Finish' : 'Next <i class="fas fa-arrow-right"></i>';
+    waitFor(st.target, 15, function (el) {
+      tourTarget = el;
+      if (el) { el.classList.add('tour-target'); try { el.scrollIntoView({ block: 'center', behavior: 'smooth' }); } catch (e) { el.scrollIntoView(); } }
+      tourTimer = setTimeout(tourPlace, el ? 320 : 0);
+    });
+  }
+  function tourPlace() {
+    if (!tourActive()) return;
+    var st = TOUR[tourStep], ring = $('tourRing'), card = $('tourCard');
+    var vw = window.innerWidth, vh = window.innerHeight, pad = 8;
+    var r = tourTarget ? tourTarget.getBoundingClientRect() : null;
+    if (!r || (!r.width && !r.height)) {
+      ring.className = 'tour-ring center'; ring.style.cssText = 'top:50%;left:50%;width:0;height:0;';
+      card.className = 'tour-card center';
+      card.style.left = Math.max(16, (vw - card.offsetWidth) / 2) + 'px';
+      card.style.top = Math.max(16, (vh - card.offsetHeight) / 2) + 'px';
+      return;
+    }
+    var top = Math.max(0, r.top - pad), left = Math.max(0, r.left - pad);
+    var w = Math.min(vw, r.width + pad * 2), h = Math.min(vh, r.height + pad * 2);
+    ring.className = 'tour-ring'; ring.style.cssText = 'top:' + top + 'px;left:' + left + 'px;width:' + w + 'px;height:' + h + 'px;';
+    var cw = card.offsetWidth, ch = card.offsetHeight, gap = 14, place = st.place || 'below';
+    var fits = { below: top + h + gap + ch < vh, above: top - gap - ch > 0, right: left + w + gap + cw < vw, left: left - gap - cw > 0 };
+    if (!fits[place]) place = fits.below ? 'below' : fits.above ? 'above' : fits.right ? 'right' : fits.left ? 'left' : 'center';
+    var x, y;
+    if (place === 'below') { x = left; y = top + h + gap; }
+    else if (place === 'above') { x = left; y = top - gap - ch; }
+    else if (place === 'right') { x = left + w + gap; y = top; }
+    else if (place === 'left') { x = left - gap - cw; y = top; }
+    else { x = (vw - cw) / 2; y = (vh - ch) / 2; }
+    x = Math.min(Math.max(16, x), vw - cw - 16); y = Math.min(Math.max(16, y), vh - ch - 16);
+    card.className = 'tour-card ' + place; card.style.left = x + 'px'; card.style.top = y + 'px';
+  }
+  $('tourNext').addEventListener('click', function () { if (tourStep >= TOUR.length - 1) return endTour(true); tourStep++; tourShow(); });
+  $('tourPrev').addEventListener('click', function () { if (tourStep > 0) { tourStep--; tourShow(); } });
+  $('tourSkip').addEventListener('click', function () { endTour(false); });
+  window.addEventListener('resize', function () { if (tourActive()) tourPlace(); });
+  document.querySelector('.main').addEventListener('scroll', function () { if (tourActive()) tourPlace(); }, { passive: true });
+  function openGuide() { startTour(0); }
+  function closeGuide() { if (tourActive()) endTour(false); }
 
   // ------------------------------------------------------------ boot
   if (window.store) initApp(); else $('login').classList.remove('hidden');
