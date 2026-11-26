@@ -11,14 +11,14 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <link rel="stylesheet" href="/css/automations.css?v=3">
   <link rel="stylesheet" href="/css/dashboard.css?v=4">
-  <link rel="stylesheet" href="/app/app.css?v=4">
+  <link rel="stylesheet" href="/app/app.css?v=5">
   <script>window.__RETNER_STORE__ = "__RETNER_STORE_JSON__";</script>
   <script src="/js/automations.js?v=3" defer></script>
   <script src="/js/media.js?v=1" defer></script>
   <script src="/js/analytics.js?v=2" defer></script>
   <script src="/js/campaign-preview.js?v=2" defer></script>
   <script src="/js/campaigns.js?v=2" defer></script>
-  <script src="/app/app.js?v=4" defer></script>
+  <script src="/app/app.js?v=5" defer></script>
 </head>
 <body>
   <!-- LOGIN -->
@@ -50,6 +50,7 @@
           <button data-view="plan">Plan</button>
         </nav>
         <div class="tb-right">
+          <button class="btn sm guide-btn" id="guideBtn" title="Step-by-step guide"><i class="fas fa-map-signs"></i> Step guide</button>
           <button class="icon-btn" id="bellBtn" aria-label="Notifications" title="What's new"><i class="far fa-bell"></i><span class="dot hidden" id="bellDot"></span></button>
           <button class="icon-btn" data-view="settings" aria-label="Settings" title="Settings"><i class="fas fa-gear"></i></button>
           <div class="avatar" id="avatar" title="">R</div>
@@ -110,7 +111,8 @@
                 </div>
               </div>
               <div class="plan" id="planCard">
-                <h3 id="planName">Starter plan</h3>
+                <span class="plan-chip hidden" id="planTrialChip"></span>
+                <h3 id="planName">Free plan</h3>
                 <p id="planText">Loading your monthly usage…</p>
                 <div class="bar" id="planBar"><span style="width:0%"></span></div>
                 <small id="planFoot"></small>
@@ -283,11 +285,11 @@
           </div>
           <div class="card">
             <div class="card-head"><div><h3>Behaviour</h3><div class="muted" style="font-size:12.5px">Based on visits, carts and orders of subscribers with notifications on.</div></div><span class="chip" id="segUpdated"></span></div>
-            <div class="seg-page-grid" id="segBehaviour"><div class="muted">Loading…</div></div>
+            <div class="lockable" id="segLockA"><div class="seg-page-grid" id="segBehaviour"><div class="muted">Loading…</div></div></div>
           </div>
           <div class="card" style="margin-top:20px;">
             <div class="card-head"><div><h3>Browser &amp; device</h3><div class="muted" style="font-size:12.5px">Useful when a promotion or image only works well on some devices.</div></div></div>
-            <div class="seg-page-grid" id="segBrowser"><div class="muted">Loading…</div></div>
+            <div class="lockable" id="segLockB"><div class="seg-page-grid" id="segBrowser"><div class="muted">Loading…</div></div></div>
           </div>
           <div class="card" style="margin-top:20px;">
             <h3>How segments work</h3>
@@ -303,11 +305,11 @@
         <!-- PLAN & USAGE -->
         <section class="view" id="view-plan">
           <div class="page-head">
-            <div><h1>Plan &amp; usage</h1><p>Your monthly notification allowance, and the plans you can move to.</p></div>
+            <div><h1>Plan &amp; usage</h1><p>Your free trial, monthly impressions, and the plans you can move to.</p></div>
           </div>
           <div class="plan-grid">
             <div class="plan plan-hero" id="planHero">
-              <div class="plan-hero-top"><span class="plan-chip">Current plan</span><span class="plan-chip ghost" id="planHeroPrice"></span></div>
+              <div class="plan-hero-top"><span class="plan-chip" id="planHeroChip">Current plan</span><span class="plan-chip ghost" id="planHeroPrice"></span></div>
               <h3 id="planHeroName">Loading…</h3>
               <p id="planHeroText">Fetching this month's usage…</p>
               <div class="bar" id="planHeroBar"><span style="width:0%"></span></div>
@@ -315,7 +317,7 @@
             </div>
             <div class="card">
               <h3>This month</h3>
-              <p class="sub">Every notification delivered to a push service counts, including automations. Test sends are free.</p>
+              <p class="sub">Every impression (a notification delivered to a push service) counts, including automations. Test sends are free.</p>
               <ul class="usage-list">
                 <li><span><i class="fas fa-bullhorn"></i> Campaigns</span><b id="pu-camp">—</b></li>
                 <li><span><i class="fas fa-wand-magic-sparkles"></i> Automations</span><b id="pu-auto">—</b></li>
@@ -325,13 +327,14 @@
               </ul>
             </div>
           </div>
+          <div class="trial-box hidden" id="planTrial" style="margin-top:20px;"></div>
           <div class="ok-box hidden" id="planPending" style="margin-top:20px;"></div>
           <h2 class="section-title">Choose a plan</h2>
           <p class="muted" style="margin:-8px 0 16px;">Request a plan and we switch you over, usually the same day. No charge until you confirm with us.</p>
           <div class="tiers" id="tiers"><div class="muted">Loading plans…</div></div>
           <div class="card" style="margin-top:20px;">
             <div class="row-between">
-              <div><h3>Need more than Pro, or an annual deal?</h3><p class="sub" style="margin:0;">Write to us and we will set up a custom allowance for your store.</p></div>
+              <div><h3>Need a custom allowance, or an annual deal?</h3><p class="sub" style="margin:0;">Write to us and we will set up a custom allowance for your store.</p></div>
               <a class="btn" id="planContact" href="#" target="_blank" rel="noopener"><i class="far fa-envelope"></i> Contact us</a>
             </div>
           </div>
@@ -369,6 +372,33 @@
         </section>
       </main>
     </div>
+  </div>
+
+  <!-- POPUPS (trial ended, limit reached) -->
+  <div id="modal" class="modal hidden" role="dialog" aria-modal="true" aria-labelledby="modalTitle">
+    <div class="modal-card">
+      <span class="modal-ic" id="modalIcon"><i class="fas fa-gift"></i></span>
+      <h2 id="modalTitle"></h2>
+      <div class="modal-body" id="modalBody"></div>
+      <div class="modal-actions" id="modalActions"></div>
+    </div>
+  </div>
+
+  <!-- STEP GUIDE (side drawer) -->
+  <div id="guideWrap" class="guide-wrap hidden">
+    <div class="guide-backdrop" id="guideBackdrop"></div>
+    <aside class="guide" aria-label="Step-by-step guide">
+      <div class="guide-head">
+        <div><div class="guide-eyebrow">Step-by-step guide</div><h2>Get the most out of Retner SmartPush</h2></div>
+        <button class="icon-btn" id="guideClose" aria-label="Close guide"><i class="fas fa-xmark"></i></button>
+      </div>
+      <div class="guide-progress"><div class="bar"><span id="guideBar" style="width:0%"></span></div><small id="guideCount"></small></div>
+      <ol class="guide-steps" id="guideSteps"></ol>
+      <div class="guide-foot">
+        <button class="btn" id="guidePrev"><i class="fas fa-arrow-left"></i> Back</button>
+        <button class="btn primary" id="guideNext">Next <i class="fas fa-arrow-right"></i></button>
+      </div>
+    </aside>
   </div>
 </body>
 </html>

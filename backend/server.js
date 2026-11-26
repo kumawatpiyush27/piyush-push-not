@@ -16,6 +16,7 @@ const media = require('./media');
 const analytics = require('./analytics');
 const usage = require('./usage');
 const plans = require('./plans');
+const entitlements = require('./entitlements');
 
 const app = express();
 
@@ -502,8 +503,8 @@ app.get('/my-store/stats', async (req, res) => {
         }
 
         const recentRes = await db.query('SELECT * FROM campaigns WHERE store_id = $1 ORDER BY created_at DESC LIMIT 5', [storeId]);
-        let monthly = null;
-        try { monthly = await usage.getUsage(db, storeId); } catch (uErr) { console.error('Usage error:', uErr.message); }
+        let monthly = null, ent = null;
+        try { ent = await entitlements.get(db, storeId); monthly = Object.assign({}, ent.usage, { plan: ent.plan, trial: ent.trial }); } catch (uErr) { console.error('Usage error:', uErr.message); }
 
         res.json({
             subscribers: parseInt(subRes.rows[0].count),
@@ -512,7 +513,8 @@ app.get('/my-store/stats', async (req, res) => {
             totalRevenue: parseFloat(campRes.rows[0].total_revenue || 0),
             totalClicks: parseInt(campRes.rows[0].total_clicks || 0),
             recentCampaigns: recentRes.rows,
-            usage: monthly
+            usage: monthly,
+            entitlements: ent
         });
     } catch (e) {
         console.error('Stats Error:', e);
@@ -576,8 +578,8 @@ app.get('/my-store/segments', async (req, res) => {
 
 app.get('/my-store/usage', async (req, res) => {
     try {
-        const u = await usage.getUsage(getPool(), req.storeId);
-        res.json({ success: true, usage: Object.assign({}, u, { plan: plans.planForLimit(u.limit) }) });
+        const ent = await entitlements.get(getPool(), req.storeId);
+        res.json({ success: true, usage: Object.assign({}, ent.usage, { plan: ent.plan, trial: ent.trial }), entitlements: ent });
     } catch (e) {
         console.error('Usage error:', e.message);
         res.status(500).json({ success: false, error: 'Could not load usage' });
@@ -609,11 +611,15 @@ app.get('/my-store/plan', async (req, res) => {
     try {
         const db = getPool();
         await ensurePlanRequests(db);
-        const u = await usage.getUsage(db, req.storeId);
+        const ent = await entitlements.get(db, req.storeId);
         res.json({
             success: true,
-            usage: u,
-            plan: plans.planForLimit(u.limit),
+            usage: ent.usage,
+            plan: ent.plan,
+            trial: ent.trial,
+            segments_unlocked: ent.segments_unlocked,
+            prompts: ent.prompts,
+            review_url: ent.review_url,
             plans: plans.PLANS,
             contact_email: plans.contactEmail(),
             pending_request: await pendingPlanRequest(db, req.storeId),
@@ -631,7 +637,7 @@ app.post('/my-store/upgrade-request', async (req, res) => {
     try {
         const db = getPool();
         await ensurePlanRequests(db);
-        const current = plans.planForLimit((await usage.getUsage(db, req.storeId)).limit);
+        const current = (await entitlements.get(db, req.storeId)).plan;
         if (current.key === plan.key && !current.custom_limit) return res.status(400).json({ success: false, error: 'You are already on the ' + plan.name + ' plan.' });
         // One open request per store: a new choice replaces the pending one.
         const pending = await pendingPlanRequest(db, req.storeId);
@@ -642,6 +648,22 @@ app.post('/my-store/upgrade-request', async (req, res) => {
         console.error('Upgrade request error:', e.message);
         res.status(500).json({ success: false, error: 'Could not send your request. Please try again.' });
     }
+});
+
+// Trial, plan and popup state for the dashboards (see entitlements.js).
+app.get('/my-store/entitlements', async (req, res) => {
+    try { res.json({ success: true, entitlements: await entitlements.get(getPool(), req.storeId) }); }
+    catch (e) { console.error('Entitlements error:', e.message); res.status(e.status || 500).json({ success: false, error: e.status ? e.message : 'Could not load your plan' }); }
+});
+// "Leave a review, get 7 more days": one extension per store.
+app.post('/my-store/trial/extend', async (req, res) => {
+    try { res.json({ success: true, entitlements: await entitlements.extendTrial(getPool(), req.storeId) }); }
+    catch (e) { console.error('Trial extend error:', e.message); res.status(e.status || 500).json({ success: false, error: e.status ? e.message : 'Could not extend the trial' }); }
+});
+// Popup dismissed: trial_ended (once), limit_reached (per month), tour (once).
+app.post('/my-store/prompts/dismiss', async (req, res) => {
+    try { res.json({ success: true, entitlements: await entitlements.dismissPrompt(getPool(), req.storeId, String((req.body && req.body.key) || '')) }); }
+    catch (e) { console.error('Prompt dismiss error:', e.message); res.status(e.status || 500).json({ success: false, error: e.status ? e.message : 'Could not save' }); }
 });
 
 // Sends a campaign draft to the merchant's own browser (marked [Test]).
@@ -1062,7 +1084,7 @@ app.get('/master-admin', (req, res) => {
                 <tr>
                     <td><strong>\${escapeHtml(r.store_name || r.store_id)}</strong><br><small class="text-muted">\${escapeHtml(r.store_id)}\${r.store_email ? ' · ' + escapeHtml(r.store_email) : ''}</small></td>
                     <td>\${Number(r.monthly_limit || 1000).toLocaleString('en-IN')}</td>
-                    <td><strong>\${escapeHtml(r.plan_name)}</strong><br><small class="text-muted">\${Number(r.plan_limit || 0).toLocaleString('en-IN')} / month\${r.plan_price ? ' · ₹' + r.plan_price : ''}</small></td>
+                    <td><strong>\${escapeHtml(r.plan_name)}</strong><br><small class="text-muted">\${Number(r.plan_limit || 0).toLocaleString('en-IN')} / month\${r.plan_price ? ' · $' + r.plan_price : ''}</small></td>
                     <td><small>\${escapeHtml(r.note || '-')}</small></td>
                     <td>\${new Date(r.created_at).toLocaleString()}</td>
                     <td class="text-nowrap">
@@ -1164,7 +1186,7 @@ app.get('/api/super/plan-requests', auth.requireSuper, async (req, res) => {
             SELECT r.id, r.store_id, r.plan, r.note, r.created_at, s.store_name, s.store_email, s.monthly_limit
             FROM plan_requests r LEFT JOIN stores s ON s.store_id = r.store_id
             WHERE r.status = 'pending' ORDER BY r.created_at DESC LIMIT 200`);
-        res.json({ requests: rows.map((r) => { const p = plans.byKey(r.plan); return Object.assign({}, r, { plan_name: p ? p.name : r.plan, plan_limit: p ? p.limit : null, plan_price: p ? p.price : null }); }) });
+        res.json({ requests: rows.map((r) => { const p = plans.byKey(r.plan); return Object.assign({}, r, { plan_name: p ? p.name : r.plan, plan_limit: p ? (p.limit === null ? plans.UNLIMITED_SENTINEL : p.limit) : null, plan_price: p ? p.price : null }); }) });
     } catch (e) {
         console.error('Plan requests error:', e.message);
         res.status(500).json({ requests: [], error: 'Could not load requests' });
@@ -1180,9 +1202,13 @@ app.post('/api/super/plan-requests/:id/resolve', auth.requireSuper, async (req, 
     try {
         const db = getPool();
         await ensurePlanRequests(db);
-        const { rows } = await db.query(`SELECT store_id FROM plan_requests WHERE id = $1 AND status = 'pending'`, [id]);
+        const { rows } = await db.query(`SELECT store_id, plan FROM plan_requests WHERE id = $1 AND status = 'pending'`, [id]);
         if (!rows.length) return res.status(404).json({ success: false, error: 'Request not found or already resolved' });
-        if (limit && limit > 0) await db.query('UPDATE stores SET monthly_limit = $1 WHERE store_id = $2', [limit, rows[0].store_id]);
+        if (limit && limit > 0) {
+            // The requested plan becomes the store's plan; the limit is kept for older readers.
+            if (plans.byKey(rows[0].plan)) await entitlements.setPlan(db, rows[0].store_id, rows[0].plan);
+            await db.query('UPDATE stores SET monthly_limit = $1 WHERE store_id = $2', [limit, rows[0].store_id]);
+        }
         await db.query(`UPDATE plan_requests SET status = $2, resolved_at = NOW() WHERE id = $1`, [id, limit && limit > 0 ? 'done' : 'dismissed']);
         res.json({ success: true });
     } catch (e) {

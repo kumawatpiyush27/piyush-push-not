@@ -13,6 +13,7 @@
     try { return new Intl.NumberFormat('en-IN', { style: 'currency', currency: cur || 'INR', maximumFractionDigits: 0 }).format(Number(n) || 0); }
     catch (e) { return '₹' + num(Math.round(Number(n) || 0)); }
   }
+  function usd(n) { return '$' + Number(n || 0).toLocaleString('en-US', { maximumFractionDigits: 0 }); }
   function ago(iso) {
     if (!iso) return '—';
     var s = Math.round((Date.now() - new Date(iso).getTime()) / 1000);
@@ -118,7 +119,8 @@
     });
   });
   $('logoutBtn').addEventListener('click', function () { sessionExpired(); window.location.hash = ''; });
-  $('helpBtn').addEventListener('click', function () { window.open('https://retner.ai', '_blank'); });
+  $('helpBtn').addEventListener('click', function () { openGuide(); });
+  $('guideBtn').addEventListener('click', function () { openGuide(); });
   $('bellBtn').addEventListener('click', function () { toast(bellText || 'No new alerts. Campaigns, automations and subscriber updates will show here.'); });
   var bellText = '';
 
@@ -145,6 +147,7 @@
         greeting(); $('avatar').textContent = n.charAt(0).toUpperCase(); $('avatar').title = n;
       }
     });
+    loadEntitlements().then(function () { if (current === 'segments') applySegmentLock(); if (current === 'creator') renderSegments(); showPrompts(); });
     var params = new URLSearchParams(window.location.search);
     var q = params.get('view');
     // ?segment=key (from the Shopify app's Segments page) preselects the audience.
@@ -183,15 +186,23 @@
       }
       drawHomeChart();
       var u = rs[2].ok ? (rs[2].data.usage || rs[2].data) : null;
+      if (rs[2].ok && rs[2].data.entitlements) ent = rs[2].data.entitlements;
       if (u && u.limit !== undefined) {
         var pct = Math.min(100, Number(u.percent) || 0);
-        $('planName').textContent = (u.plan && u.plan.name ? u.plan.name : (Number(u.limit) >= 50000 ? 'Pro' : Number(u.limit) >= 10000 ? 'Growth' : 'Starter')) + ' plan';
-        $('planText').textContent = num(u.used) + ' of ' + num(u.limit) + ' notifications used this month';
+        var tr = u.trial || (ent && ent.trial);
+        var onTrial = !!(tr && tr.active);
+        $('planTrialChip').classList.toggle('hidden', !onTrial);
+        if (onTrial) $('planTrialChip').textContent = 'Free trial · ' + tr.days_left + ' day' + (tr.days_left === 1 ? '' : 's') + ' left';
+        $('planName').textContent = onTrial ? 'Unlimited (trial)' : (u.plan && u.plan.name ? u.plan.name : 'Free') + ' plan';
+        if (onTrial) $('planText').textContent = num(u.used) + ' impressions this month · unlimited until ' + dateShort(tr.ends_at);
+        else if (u.unlimited || u.limit === null) $('planText').textContent = num(u.used) + ' impressions this month · no cap';
+        else $('planText').textContent = num(u.used) + ' of ' + num(u.limit) + ' impressions used this month';
         $('planBar').className = 'bar' + (pct >= 100 ? ' over' : pct >= 80 ? ' warn' : '');
         $('planBar').firstElementChild.style.width = pct + '%';
-        $('planFoot').textContent = (u.resets_on ? 'Resets on ' + new Date(u.resets_on).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) + ' · ' : '') + num(u.remaining) + ' left';
-        bellText = pct >= 80 ? 'You have used ' + pct + '% of this month\'s notifications.' : '';
-        $('bellDot').classList.toggle('hidden', pct < 80);
+        $('planFoot').textContent = (u.limit === null || onTrial) ? (onTrial ? 'Segments and every feature unlocked during the trial' : 'Unlimited impressions') : ((u.resets_on ? 'Resets on ' + new Date(u.resets_on).toLocaleDateString('en-IN', { day: 'numeric', month: 'short' }) + ' · ' : '') + num(u.remaining) + ' left');
+        $('planBtn').innerHTML = onTrial ? '<i class="fas fa-bolt"></i> See plans' : '<i class="fas fa-bolt"></i> Upgrade plan';
+        bellText = pct >= 80 && !onTrial && u.limit !== null ? 'You have used ' + pct + '% of this month\'s impressions.' : '';
+        $('bellDot').classList.toggle('hidden', !bellText);
       } else {
         $('planText').textContent = 'Your monthly notification allowance appears here.';
         $('planFoot').textContent = '';
@@ -314,6 +325,7 @@
     $('discountLink').href = 'https://admin.shopify.com/store/' + encodeURIComponent(window.store.id) + '/discounts';
     $('segGrid').addEventListener('click', function (e) {
       var c = e.target.closest('[data-seg]'); if (!c) return;
+      if (c.classList.contains('locked')) { showUpgradeModal('segments'); return; }
       segment = c.getAttribute('data-seg'); renderSegments();
     });
     $('segGrid').addEventListener('keydown', function (e) {
@@ -344,10 +356,13 @@
   var SEG_ICONS = { all: 'fa-users', active_7d: 'fa-bolt', active_30d: 'fa-calendar', new_7d: 'fa-user-plus', inactive_30d: 'fa-moon', cart_30d: 'fa-cart-shopping', buyers_30d: 'fa-bag-shopping', chrome: 'fab fa-chrome', safari: 'fab fa-safari', firefox: 'fab fa-firefox-browser', edge: 'fab fa-edge' };
   function segIcon(key) { var ic = SEG_ICONS[key] || 'fa-users'; return ic.indexOf('fab') === 0 ? ic : 'fas ' + ic; }
   function renderSegments() {
+    var locked = segmentsLocked();
+    if (locked && segment !== 'all') segment = 'all';
     $('segGrid').innerHTML = segments.map(function (s) {
-      return '<div class="seg-card' + (s.key === segment ? ' active' : '') + (s.count ? '' : ' empty') + '" data-seg="' + esc(s.key) + '" role="radio" aria-checked="' + (s.key === segment) + '" tabindex="0">' +
-        '<span class="ic"><i class="' + segIcon(s.key) + '"></i></span><div><b>' + esc(s.name) + '</b>' + (s.desc ? '<span>' + esc(s.desc) + '</span>' : '') + '</div><em>' + num(s.count) + '</em></div>';
-    }).join('');
+      var isLocked = locked && s.key !== 'all';
+      return '<div class="seg-card' + (s.key === segment ? ' active' : '') + (s.count ? '' : ' empty') + (isLocked ? ' locked' : '') + '" data-seg="' + esc(s.key) + '" role="radio" aria-checked="' + (s.key === segment) + '" tabindex="0"' + (isLocked ? ' title="Upgrade to target this segment"' : '') + '>' +
+        '<span class="ic"><i class="' + (isLocked ? 'fas fa-lock' : segIcon(s.key)) + '"></i></span><div><b>' + esc(s.name) + '</b>' + (s.desc ? '<span>' + esc(s.desc) + '</span>' : '') + '</div><em>' + num(s.count) + '</em></div>';
+    }).join('') + (locked ? '<div class="seg-lock-note"><span><i class="fas fa-lock"></i> Targeted audiences are part of the Growth and Unlimited plans. Free sends to all subscribers.</span><button class="btn sm primary" type="button" data-unlock-plan><i class="fas fa-bolt"></i> Unlock your plan</button></div>' : '');
     updateReach();
   }
   function updateReach() {
@@ -560,11 +575,32 @@
       var browser = list.filter(function (s) { return BROWSER_SEGS[s.key]; });
       $('segBehaviour').innerHTML = behaviour.length ? behaviour.map(tile).join('') : '<div class="muted">No segments yet.</div>';
       $('segBrowser').innerHTML = browser.length ? browser.map(tile).join('') : '<div class="muted">No browser segments yet.</div>';
+      applySegmentLock();
+    });
+  }
+  // Free plan: counts stay visible, the segment tiles are blurred behind an
+  // "Unlock your plan" card. Growth, Unlimited and the trial unlock them.
+  function applySegmentLock() {
+    var locked = segmentsLocked();
+    [['segLockA', true], ['segLockB', false]].forEach(function (pair) {
+      var wrap = $(pair[0]); if (!wrap) return;
+      wrap.classList.toggle('locked', locked);
+      var old = wrap.querySelector('.lock-overlay'); if (old) old.remove();
+      if (locked && pair[1]) {
+        var o = document.createElement('div'); o.className = 'lock-overlay';
+        o.innerHTML = '<div class="lock-card"><span class="ic"><i class="fas fa-lock"></i></span><b>Unlock your plan to use segments</b><p>Segments are included in the Growth ($30/month) and Unlimited ($50/month) plans. Your counts keep updating meanwhile.</p><button class="btn primary" type="button" data-unlock-plan><i class="fas fa-bolt"></i> Unlock your plan</button></div>';
+        wrap.appendChild(o);
+      }
     });
   }
   $('segRefresh').addEventListener('click', function () { loadSegmentsPage(); toast('Segment counts refreshed.'); });
+  document.addEventListener('click', function (e) {
+    var u = e.target && e.target.closest ? e.target.closest('[data-unlock-plan]') : null;
+    if (u) { e.preventDefault(); closeModal(); showView('plan'); }
+  });
   $('view-segments').addEventListener('click', function (e) {
     var b = e.target.closest('[data-send-seg]'); if (!b || b.disabled) return;
+    if (segmentsLocked()) { showUpgradeModal('segments'); return; }
     pendingSegment = b.getAttribute('data-send-seg');
     showView('creator');
   });
@@ -580,20 +616,41 @@
         return;
       }
       planData = r.data;
-      var u = r.data.usage, p = r.data.plan;
+      if (r.data.trial) ent = Object.assign({}, ent || {}, { plan: r.data.plan, trial: r.data.trial, usage: r.data.usage, segments_unlocked: r.data.segments_unlocked, prompts: r.data.prompts || (ent && ent.prompts) || {}, review_url: r.data.review_url });
+      var u = r.data.usage, p = r.data.plan, tr = r.data.trial || {};
+      var onTrial = !!tr.active;
       var pct = Math.min(100, Number(u.percent) || 0);
-      $('planHeroName').textContent = p.name + ' plan';
-      $('planHeroPrice').textContent = p.price === null ? 'Custom pricing' : p.price === 0 ? 'Free' : money(p.price) + ' / month';
-      $('planHeroText').textContent = num(u.used) + ' of ' + num(u.limit) + ' notifications used this month' + (p.custom_limit ? ' (custom allowance)' : '');
+      $('planHeroChip').textContent = onTrial ? 'Free trial' : 'Current plan';
+      $('planHeroChip').className = 'plan-chip' + (onTrial ? ' trial' : '');
+      $('planHeroName').textContent = onTrial ? 'Unlimited (trial)' : p.name + ' plan';
+      $('planHeroPrice').textContent = onTrial ? tr.days_left + ' day' + (tr.days_left === 1 ? '' : 's') + ' left' : p.price === null ? 'Custom pricing' : p.price === 0 ? 'Free' : usd(p.price) + ' / month';
+      if (onTrial) $('planHeroText').textContent = num(u.used) + ' impressions this month. Everything is unlocked until ' + dateShort(tr.ends_at) + ', then your store moves to the ' + p.name + ' plan.';
+      else if (u.limit === null) $('planHeroText').textContent = num(u.used) + ' impressions this month. No monthly cap on this plan.';
+      else $('planHeroText').textContent = num(u.used) + ' of ' + num(u.limit) + ' impressions used this month' + (p.custom_limit ? ' (custom allowance)' : '');
       $('planHeroBar').className = 'bar' + (pct >= 100 ? ' over' : pct >= 80 ? ' warn' : '');
-      $('planHeroBar').firstElementChild.style.width = pct + '%';
-      $('planHeroFoot').textContent = pct + '% used' + (u.resets_on ? ' · resets on ' + dateShort(u.resets_on) : '');
+      $('planHeroBar').firstElementChild.style.width = (onTrial || u.limit === null ? 0 : pct) + '%';
+      $('planHeroFoot').textContent = (onTrial || u.limit === null) ? 'Unlimited impressions' : pct + '% used' + (u.resets_on ? ' · resets on ' + dateShort(u.resets_on) : '');
       $('pu-camp').textContent = num(u.campaigns); $('pu-auto').textContent = num(u.automations);
-      $('pu-used').textContent = num(u.used); $('pu-left').textContent = num(u.remaining); $('pu-reset').textContent = dateShort(u.resets_on);
+      $('pu-used').textContent = num(u.used); $('pu-left').textContent = u.limit === null ? 'Unlimited' : num(u.remaining); $('pu-reset').textContent = dateShort(u.resets_on);
+      renderTrialBox(tr, p);
       $('planContact').href = 'mailto:' + r.data.contact_email + '?subject=' + encodeURIComponent('SmartPush custom plan for ' + window.store.id);
       renderPending(r.data.pending_request);
       renderTiers();
     });
+  }
+  function renderTrialBox(tr, p) {
+    var box = $('planTrial');
+    if (!tr || !tr.ends_at) { box.classList.add('hidden'); return; }
+    box.classList.remove('hidden');
+    box.className = 'trial-box' + (tr.active ? '' : ' ended');
+    if (tr.active) {
+      box.innerHTML = '<span><i class="fas fa-gift"></i> <b>Free trial:</b> ' + tr.days_left + ' day' + (tr.days_left === 1 ? '' : 's') + ' left, ends ' + esc(dateShort(tr.ends_at)) + '. ' + (tr.extended ? 'This trial was extended once.' : 'Unlimited impressions and segments until then.') + '</span>' +
+        (tr.can_extend ? '<button class="btn sm" type="button" id="extendBtn"><i class="fas fa-star"></i> Leave a review, get +' + tr.extension_days + ' days</button>' : '');
+    } else {
+      box.innerHTML = '<span><i class="fas fa-hourglass-end"></i> <b>Your free trial ended</b> on ' + esc(dateShort(tr.ends_at)) + '. ' + (tr.extended ? 'It was already extended once; upgrade to keep segments and higher limits.' : 'Leave a review on our app and get ' + tr.extension_days + ' more days free.') + '</span>' +
+        (tr.can_extend ? '<button class="btn sm primary" type="button" id="extendBtn"><i class="fas fa-star"></i> Leave a review &amp; extend</button>' : '');
+    }
+    var b = $('extendBtn'); if (b) b.addEventListener('click', function () { extendTrial(b); });
   }
   function renderPending(req) {
     var box = $('planPending');
@@ -607,14 +664,14 @@
     var curIdx = planData.plans.findIndex(function (p) { return p.key === cur.key; });
     $('tiers').innerHTML = planData.plans.map(function (p, i) {
       var isCur = p.key === cur.key && !cur.custom_limit;
-      var tag = isCur ? 'Current plan' : (p.key === 'growth' && curIdx < 1 ? 'Most popular' : '');
+      var tag = isCur ? 'Current plan' : (p.key === 'growth' && curIdx < 1 ? 'Most popular' : (p.key === 'unlimited' && planData.trial && planData.trial.active ? 'Your trial plan' : ''));
       var btn;
       if (isCur) btn = '<button class="btn block" disabled><i class="fas fa-check"></i> Your current plan</button>';
       else if (pending && pending.plan === p.key) btn = '<button class="btn block soft" disabled><i class="far fa-clock"></i> Requested</button>';
       else btn = '<button class="btn block' + (i > curIdx ? ' primary' : '') + '" data-req-plan="' + esc(p.key) + '"><i class="fas fa-bolt"></i> ' + (i > curIdx ? 'Request upgrade' : 'Switch to this plan') + '</button>';
       return '<div class="tier' + (isCur ? ' current' : '') + (tag === 'Most popular' ? ' recommended' : '') + '">' + (tag ? '<span class="tag">' + tag + '</span>' : '') +
-        '<h3>' + esc(p.name) + '</h3><div class="price">' + (p.price ? money(p.price) + '<small> / month</small>' : 'Free') + '</div>' +
-        '<div class="limit"><i class="fas fa-paper-plane"></i> ' + num(p.limit) + ' notifications / month</div>' +
+        '<h3>' + esc(p.name) + '</h3><div class="price">' + (p.price ? usd(p.price) + '<small> / month</small>' : 'Free') + '</div>' +
+        '<div class="limit"><i class="fas fa-' + (p.limit === null ? 'infinity' : 'paper-plane') + '"></i> ' + (p.limit === null ? 'Unlimited impressions' : num(p.limit) + ' impressions / month') + '</div>' +
         '<p class="blurb">' + esc(p.blurb) + '</p><ul>' + p.features.map(function (f) { return '<li><i class="fas fa-check"></i>' + esc(f) + '</li>'; }).join('') + '</ul>' + btn + '</div>';
     }).join('');
   }
@@ -622,7 +679,7 @@
     var b = e.target.closest('[data-req-plan]'); if (!b || !planData) return;
     var key = b.getAttribute('data-req-plan');
     var p = planData.plans.filter(function (x) { return x.key === key; })[0]; if (!p) return;
-    if (!window.confirm('Request the ' + p.name + ' plan (' + num(p.limit) + ' notifications a month' + (p.price ? ', ' + money(p.price) + '/month' : '') + ')? We will confirm by email before anything is charged.')) return;
+    if (!window.confirm('Request the ' + p.name + ' plan (' + (p.limit === null ? 'unlimited impressions' : num(p.limit) + ' impressions a month') + (p.price ? ', ' + usd(p.price) + '/month' : '') + ')? We will confirm by email before anything is charged.')) return;
     b.disabled = true; b.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Sending…';
     api('/my-store/upgrade-request', { method: 'POST', body: { plan: key } }).then(function (r) {
       if (!r.ok || !r.data.success) { b.disabled = false; b.innerHTML = '<i class="fas fa-bolt"></i> Request upgrade'; return toast(r.data.error || 'Could not send the request.', 'err'); }
@@ -666,6 +723,145 @@
       $('pwMsg').textContent = r.data.success ? 'Password saved. You can now sign in with your store ID and this password.' : (r.data.error || 'Could not save the password.');
       if (r.data.success) $('setNewPassword').value = '';
     });
+  });
+
+  // ------------------------------------------------------------ plan state (trial, limits, popups)
+  var ent = null;
+  function loadEntitlements() {
+    return api('/my-store/entitlements').then(function (r) {
+      if (r.ok && r.data.success) ent = r.data.entitlements;
+      return ent;
+    });
+  }
+  function segmentsLocked() { return !!(ent && ent.segments_unlocked === false); }
+  function dismissPrompt(key) {
+    if (ent && ent.prompts) ent.prompts[key] = false;
+    return api('/my-store/prompts/dismiss', { method: 'POST', body: { key: key } }).then(function (r) { if (r.ok && r.data.success) ent = r.data.entitlements; });
+  }
+  function extendTrial(btn) {
+    if (btn) { btn.disabled = true; btn.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Extending…'; }
+    var review = (ent && ent.review_url) || 'https://apps.shopify.com/retner-smartpush-live/reviews';
+    window.open(review, '_blank', 'noopener');
+    return api('/my-store/trial/extend', { method: 'POST' }).then(function (r) {
+      if (!r.ok || !r.data.success) { if (btn) { btn.disabled = false; btn.innerHTML = '<i class="fas fa-star"></i> Leave a review &amp; extend'; } return toast(r.data.error || 'Could not extend the trial.', 'err'); }
+      ent = r.data.entitlements;
+      closeModal();
+      toast('Thank you! Your trial now runs until ' + dateShort(ent.trial.ends_at) + '.', 'ok');
+      if (current === 'plan') loadPlan();
+      if (current === 'home') loadHome();
+      if (current === 'segments') applySegmentLock();
+      if (current === 'creator') renderSegments();
+    });
+  }
+
+  // Generic popup: { icon, tone, title, html, actions: [{ label, primary, onClick }] }
+  function showModal(o) {
+    $('modalIcon').innerHTML = '<i class="fas ' + (o.icon || 'fa-gift') + '"></i>';
+    $('modalIcon').className = 'modal-ic' + (o.tone ? ' ' + o.tone : '');
+    $('modalTitle').textContent = o.title || '';
+    $('modalBody').innerHTML = o.html || '';
+    var acts = $('modalActions'); acts.innerHTML = '';
+    (o.actions || []).forEach(function (a) {
+      var b = document.createElement('button'); b.type = 'button';
+      b.className = 'btn block' + (a.primary ? ' primary lg' : '');
+      b.innerHTML = a.html || esc(a.label);
+      b.addEventListener('click', function () { a.onClick ? a.onClick(b) : closeModal(); });
+      acts.appendChild(b);
+    });
+    $('modal').classList.remove('hidden');
+  }
+  function closeModal() { $('modal').classList.add('hidden'); }
+  $('modal').addEventListener('click', function (e) { if (e.target === $('modal')) closeModal(); });
+  document.addEventListener('keydown', function (e) { if (e.key === 'Escape') { closeModal(); closeGuide(); } });
+
+  function showTrialEndedModal() {
+    var tr = ent.trial || {};
+    showModal({
+      icon: 'fa-gift', title: 'Want to extend the trial by 7 more days?',
+      html: '<p>Your 7-day free trial has ended. Leave a review on our app and get <b>7 more days of free trial</b> (extended version): unlimited impressions and segments, no card needed.</p><span class="pill"><i class="fas fa-star"></i> One review = +' + (tr.extension_days || 7) + ' days</span>',
+      actions: [
+        { html: '<i class="fas fa-star"></i> Leave a review &amp; extend my trial', primary: true, onClick: function (b) { extendTrial(b); } },
+        { label: 'Maybe later', onClick: function () { closeModal(); dismissPrompt('trial_ended'); } },
+      ],
+    });
+  }
+  function showUpgradeModal(reason) {
+    var u = (ent && ent.usage) || {};
+    var why = reason === 'segments'
+      ? '<p>Targeted segments are part of the <b>Growth</b> ($30/month) and <b>Unlimited</b> ($50/month) plans. Upgrade to send campaigns to shoppers who added to cart, went quiet, or just joined.</p>'
+      : '<p>You have used all <b>' + num(u.limit) + ' free impressions</b> for this month' + (u.resets_on ? ' (resets ' + esc(dateShort(u.resets_on)) + ')' : '') + '. Upgrade to keep your campaigns and automations going.</p>';
+    showModal({
+      icon: reason === 'segments' ? 'fa-lock' : 'fa-bolt', tone: reason === 'segments' ? '' : 'warn',
+      title: reason === 'segments' ? 'Unlock your plan' : 'Free impressions used up',
+      html: why + '<span class="pill">Growth $30 · ' + num((planData && planData.plans && planData.plans[1] && planData.plans[1].limit) || 50000) + ' impressions</span> <span class="pill">Unlimited $50 · no cap</span>',
+      actions: [
+        { html: '<i class="fas fa-bolt"></i> Upgrade now', primary: true, onClick: function () { closeModal(); if (reason !== 'segments') dismissPrompt('limit_reached'); showView('plan'); } },
+        { label: 'Not now', onClick: function () { closeModal(); if (reason !== 'segments') dismissPrompt('limit_reached'); } },
+      ],
+    });
+  }
+  // On load: the trial-ended popup wins, then the limit popup, else the guide on a first visit.
+  function showPrompts() {
+    if (!ent) return;
+    if (ent.prompts && ent.prompts.trial_ended) return showTrialEndedModal();
+    if (ent.prompts && ent.prompts.limit_reached) return showUpgradeModal('limit');
+    var seen = false; try { seen = !!localStorage.getItem('guide_seen_' + window.store.id); } catch (e) { /* ignore */ }
+    if (!seen && !(ent.prompts && ent.prompts.tour_done)) openGuide();
+  }
+
+  // ------------------------------------------------------------ step guide (side drawer)
+  var GUIDE = [
+    { view: 'settings', title: 'Turn Retner on in your theme', desc: 'One switch in the theme editor.', body: 'Shoppers only see the subscribe prompt once the app embed is on. Open <b>Shopify admin → Online Store → Themes → Customize → App embeds</b> and switch on <b>Retner SmartPush</b>. Then set your store name, logo and contact email here in Settings: they appear on every notification.' },
+    { view: 'home', title: 'Read the Home page', desc: 'Subscribers, sends, clicks and revenue at a glance.', body: 'The four tiles compare the last 7, 30 or 90 days with the period before. The Activity chart switches between sent, clicks and subscribers. The plan card shows your trial or monthly impressions, and Quick actions jump to the pages you use most.' },
+    { view: 'creator', title: 'Send your first campaign', desc: 'Title, message, link, images, buttons, audience, schedule.', body: 'Start from a template or write your own. Keep the title under 50 and the message under 120 characters. Add a hero image (2:1) and up to two buttons, pick an audience, then <b>Send test to me</b> to see it on your own device before you send or schedule it.<ul><li>Flash sales can have an end time.</li><li>Click tracking and UTM tags are added for you, so revenue shows up in Analytics.</li></ul>' },
+    { view: 'campaigns', title: 'Track campaigns', desc: 'Sent and scheduled, with delivery and click counts.', body: 'Every campaign you sent or scheduled is listed here with delivered counts, click rate and revenue. Scheduled campaigns can be cancelled until they go out; <b>Process pending</b> sends anything due right now.' },
+    { view: 'automations', title: 'Switch on automations', desc: 'Welcome, abandoned cart, browse abandonment, win-back and more.', body: 'Automations send themselves. Turn on <b>Welcome</b> first (it greets every new subscriber), then <b>Abandoned cart</b> with a delay and an optional discount. Browse abandonment, win-back, order thank-you, price drop and back-in-stock each have their own copy, timing and test button.' },
+    { view: 'subscribers', title: 'Watch your subscribers grow', desc: 'Growth chart, latest subscribers, device mix.', body: 'See who subscribed, from which browser, and when they were last seen. The growth chart shows daily sign-ups; the Segments card on the right previews the audiences you can target.' },
+    { view: 'segments', title: 'Target with segments', desc: 'Ready-made audiences from live behaviour.', body: 'Segments are counted live from visits, carts and orders: active this week, added to cart, bought recently, inactive 30+ days, and by browser. Pick one and click <b>Send campaign</b> to open the creator with that audience selected. Segments are included in the Growth and Unlimited plans and during your trial.' },
+    { view: 'analytics', title: 'Measure results', desc: 'Delivery, clicks, revenue, best campaigns.', body: 'Analytics shows sends, clicks, click rate and attributed revenue over time, plus your best-performing campaigns and automations. Revenue comes from orders placed after a notification click.' },
+    { view: 'plan', title: 'Know your plan', desc: 'Free trial, impressions and upgrades.', body: 'Every store starts with a <b>7-day free trial</b> of Unlimited. After that the <b>Free</b> plan includes 10,000 impressions a month; <b>Growth</b> ($30) and <b>Unlimited</b> ($50) add more impressions and unlock segments. Leave a review on our app to extend the trial once by 7 days.' },
+  ];
+  var guideStep = 0;
+  function renderGuide() {
+    var done = {}; try { done = JSON.parse(localStorage.getItem('guide_done_' + window.store.id) || '{}'); } catch (e) { done = {}; }
+    $('guideSteps').innerHTML = GUIDE.map(function (g, i) {
+      return '<li class="guide-step' + (i === guideStep ? ' on' : '') + (done[i] ? ' done' : '') + '" data-step="' + i + '"><span class="n">' + (done[i] ? '<i class="fas fa-check"></i>' : (i + 1)) + '</span><div><b>Step ' + (i + 1) + ': ' + esc(g.title) + '</b><span>' + esc(g.desc) + '</span>' +
+        '<div class="body">' + g.body + '<button class="btn sm primary" type="button" data-guide-open="' + esc(g.view) + '"><i class="fas fa-arrow-up-right-from-square"></i> Open this page</button></div></div></li>';
+    }).join('');
+    var n = Object.keys(done).length;
+    $('guideBar').style.width = Math.round((n / GUIDE.length) * 100) + '%';
+    $('guideCount').textContent = n + ' of ' + GUIDE.length + ' steps done · step ' + (guideStep + 1) + ' of ' + GUIDE.length;
+    $('guidePrev').disabled = guideStep === 0;
+    $('guideNext').innerHTML = guideStep === GUIDE.length - 1 ? '<i class="fas fa-check"></i> Finish' : 'Next <i class="fas fa-arrow-right"></i>';
+    var on = $('guideSteps').querySelector('.on'); if (on && on.scrollIntoView) on.scrollIntoView({ block: 'nearest' });
+  }
+  function markGuideDone(i) {
+    var done = {}; try { done = JSON.parse(localStorage.getItem('guide_done_' + window.store.id) || '{}'); } catch (e) { done = {}; }
+    done[i] = true;
+    try { localStorage.setItem('guide_done_' + window.store.id, JSON.stringify(done)); } catch (e) { /* ignore */ }
+    if (Object.keys(done).length >= GUIDE.length && !(ent && ent.prompts && ent.prompts.tour_done)) dismissPrompt('tour');
+  }
+  function openGuide() {
+    try { localStorage.setItem('guide_seen_' + window.store.id, '1'); } catch (e) { /* ignore */ }
+    var idx = GUIDE.findIndex(function (g) { return g.view === current; });
+    if (idx >= 0) guideStep = idx;
+    renderGuide();
+    $('guideWrap').classList.remove('hidden');
+  }
+  function closeGuide() { $('guideWrap').classList.add('hidden'); }
+  $('guideClose').addEventListener('click', closeGuide);
+  $('guideBackdrop').addEventListener('click', closeGuide);
+  $('guidePrev').addEventListener('click', function () { if (guideStep > 0) { guideStep--; renderGuide(); } });
+  $('guideNext').addEventListener('click', function () {
+    markGuideDone(guideStep);
+    if (guideStep < GUIDE.length - 1) { guideStep++; renderGuide(); }
+    else { closeGuide(); toast('You have seen every feature. Open the guide any time from the top bar.', 'ok'); }
+  });
+  $('guideSteps').addEventListener('click', function (e) {
+    var o = e.target.closest('[data-guide-open]');
+    if (o) { markGuideDone(guideStep); showView(o.getAttribute('data-guide-open')); if (window.innerWidth < 900) closeGuide(); renderGuide(); return; }
+    var li = e.target.closest('[data-step]');
+    if (li) { guideStep = parseInt(li.getAttribute('data-step'), 10) || 0; renderGuide(); }
   });
 
   // ------------------------------------------------------------ boot
