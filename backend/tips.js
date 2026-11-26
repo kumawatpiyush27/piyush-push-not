@@ -173,12 +173,19 @@ async function storeContext(db, storeId) {
     };
 }
 
+// DATE columns come back from pg as local-midnight Date objects; compare as YYYY-MM-DD.
+function ymd(v) {
+    if (!v) return null;
+    if (v instanceof Date) return v.getFullYear() + '-' + String(v.getMonth() + 1).padStart(2, '0') + '-' + String(v.getDate()).padStart(2, '0');
+    return String(v).slice(0, 10);
+}
+
 function eligible(t, ctx, today) {
     if (!t.active) return false;
     if (t.day_min !== null && t.day_min !== undefined && ctx.day < t.day_min) return false;
     if (t.day_max !== null && t.day_max !== undefined && ctx.day > t.day_max) return false;
-    if (t.season_from && today < String(t.season_from).slice(0, 10)) return false;
-    if (t.season_to && today > String(t.season_to).slice(0, 10)) return false;
+    if (t.season_from && today < ymd(t.season_from)) return false;
+    if (t.season_to && today > ymd(t.season_to)) return false;
     const c = t.conditions || {};
     if (c.no_campaign && ctx.campaigns_sent > 0) return false;
     if (c.has_campaign && ctx.campaigns_sent === 0) return false;
@@ -203,7 +210,7 @@ function seededRandom(seedStr) {
 }
 
 function publicItem(t) {
-    return { id: t.id, kind: t.kind, title: t.title, body: t.body, cta_label: t.cta_label, cta_view: t.cta_view, cta_params: t.cta_params || {}, priority: t.priority, season_from: t.season_from, season_to: t.season_to };
+    return { id: t.id, kind: t.kind, title: t.title, body: t.body, cta_label: t.cta_label, cta_view: t.cta_view, cta_params: t.cta_params || {}, priority: t.priority, season_from: ymd(t.season_from), season_to: ymd(t.season_to) };
 }
 
 // surface: home (3 rotated, onboarding first in the first days), loading (1
@@ -212,7 +219,7 @@ async function pick(db, storeId, surface, n) {
     await ensureTables(db);
     const ctx = await storeContext(db, storeId);
     if (!ctx) return { items: [], context: null };
-    const today = new Date().toISOString().slice(0, 10);
+    const today = ymd(new Date());
     const { rows } = await db.query('SELECT * FROM merchant_tips WHERE active = TRUE ORDER BY priority DESC, id');
     const all = rows.filter((t) => eligible(t, ctx, today));
     if (surface === 'creator') {
@@ -264,7 +271,7 @@ async function adminList(db) {
                 (SELECT COUNT(*)::int FROM tip_events e WHERE e.tip_id = t.id AND e.kind IN ('clicked','used')) AS clicked,
                 (SELECT COUNT(*)::int FROM tip_events e WHERE e.tip_id = t.id AND e.kind = 'wanted') AS wanted
          FROM merchant_tips t ORDER BY active DESC, kind, priority DESC, id`);
-    return rows;
+    return rows.map((r) => Object.assign({}, r, { season_from: ymd(r.season_from), season_to: ymd(r.season_to) }));
 }
 
 function cleanItem(input) {
