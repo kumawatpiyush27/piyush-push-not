@@ -365,8 +365,8 @@ table.tbl tr:last-child td { border-bottom: 0; }
 .pp-preview-wrap { position: sticky; top: 12px; }
 .pp-device { display: flex; gap: 6px; }
 .ppv-scope { position: relative; overflow: hidden; background: #fff; }
-.ppv-scope.frame { border: 1px solid #e5e7eb; border-radius: 14px; box-shadow: 0 8px 30px rgba(17,24,39,.08); }
-.ppv-scope.phone { width: 300px; margin: 0 auto; border-radius: 28px; border: 8px solid #111827; }
+.ppv-scope.ppv-frame { border: 1px solid #e5e7eb; border-radius: 14px; box-shadow: 0 8px 30px rgba(17,24,39,.08); }
+.ppv-scope.ppv-phone { width: 300px; margin: 0 auto; border-radius: 28px; border: 8px solid #111827; }
 .ppv-bar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: #f3f4f6; border-bottom: 1px solid #e5e7eb; }
 .ppv-bar i { width: 10px; height: 10px; border-radius: 5px; display: inline-block; }
 .ppv-bar .url { flex: 1; margin-left: 8px; background: #fff; border: 1px solid #e5e7eb; border-radius: 999px; padding: 4px 12px; font-size: 12px; color: #6b7280; }
