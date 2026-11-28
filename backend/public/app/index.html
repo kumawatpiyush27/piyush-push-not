@@ -11,14 +11,14 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <link rel="stylesheet" href="/css/automations.css?v=3">
   <link rel="stylesheet" href="/css/dashboard.css?v=5">
-  <link rel="stylesheet" href="/app/app.css?v=8">
+  <link rel="stylesheet" href="/app/app.css?v=9">
   <script>window.__RETNER_STORE__ = "__RETNER_STORE_JSON__";</script>
   <script src="/js/automations.js?v=4" defer></script>
   <script src="/js/media.js?v=2" defer></script>
   <script src="/js/analytics.js?v=2" defer></script>
   <script src="/js/campaign-preview.js?v=2" defer></script>
   <script src="/js/campaigns.js?v=2" defer></script>
-  <script src="/app/app.js?v=9" defer></script>
+  <script src="/app/app.js?v=10" defer></script>
 </head>
 <body>
   <!-- LOGIN -->
@@ -46,6 +46,8 @@
           <button data-view="automations">Automations</button>
           <button data-view="subscribers">Subscribers</button>
           <button data-view="segments">Segments</button>
+          <button data-view="contacts">Contacts</button>
+          <button data-view="popups">Popups</button>
           <button data-view="analytics">Analytics</button>
           <button data-view="plan">Plan</button>
         </nav>
@@ -64,6 +66,8 @@
           <button data-view="automations" data-tip="Automations"><i class="fas fa-wand-magic-sparkles"></i></button>
           <button data-view="subscribers" data-tip="Subscribers"><i class="fas fa-users"></i></button>
           <button data-view="segments" data-tip="Segments"><i class="fas fa-layer-group"></i></button>
+          <button data-view="contacts" data-tip="Contacts"><i class="fas fa-address-book"></i></button>
+          <button data-view="popups" data-tip="Popups"><i class="fas fa-window-restore"></i></button>
           <button data-view="analytics" data-tip="Analytics"><i class="fas fa-chart-line"></i></button>
         </div>
         <div class="grp bottom">
@@ -342,6 +346,42 @@
               <a class="btn" id="planContact" href="#" target="_blank" rel="noopener"><i class="far fa-envelope"></i> Contact us</a>
             </div>
           </div>
+        </section>
+
+        <!-- CONTACTS -->
+        <section class="view" id="view-contacts">
+          <div class="page-head">
+            <div><h1>Contacts</h1><p>One row per person: every device they subscribed on, plus the phone, email and orders we have learned about them.</p></div>
+            <div class="head-actions"><a class="btn" id="contactsCsv" href="#"><i class="fas fa-download"></i> Export CSV</a><button class="btn primary" data-view="popups"><i class="fas fa-window-restore"></i> Collect phone &amp; email</button></div>
+          </div>
+          <div class="kpis">
+            <div class="kpi"><div class="k-top"><span class="k-ic"><i class="fas fa-users"></i></span>Contacts</div><div class="k-val"><span id="c-total" class="skel">0000</span></div><div class="k-foot">People across all devices</div></div>
+            <div class="kpi"><div class="k-top"><span class="k-ic green"><i class="fas fa-phone"></i></span>With phone</div><div class="k-val"><span id="c-phone" class="skel">000</span></div><div class="k-foot" id="c-phone-f">&nbsp;</div></div>
+            <div class="kpi"><div class="k-top"><span class="k-ic amber"><i class="fas fa-envelope"></i></span>With email</div><div class="k-val"><span id="c-email" class="skel">000</span></div><div class="k-foot">&nbsp;</div></div>
+            <div class="kpi"><div class="k-top"><span class="k-ic violet"><i class="fas fa-bag-shopping"></i></span>Buyers</div><div class="k-val"><span id="c-buyers" class="skel">00</span></div><div class="k-foot" id="c-leads-f">&nbsp;</div></div>
+          </div>
+          <div class="card">
+            <div class="card-head">
+              <div class="tabs" id="contactTabs"><button data-f="all" class="active">All</button><button data-f="contact">With phone or email</button><button data-f="phone">Phone</button><button data-f="email">Email</button><button data-f="whatsapp">WhatsApp opt-in</button><button data-f="buyers">Buyers</button></div>
+              <input class="input" id="contactSearch" placeholder="Search name, phone, email, customer id" style="max-width:300px;">
+            </div>
+            <div class="table-wrap"><table class="tbl"><thead><tr><th>Contact</th><th>Phone</th><th>Email</th><th>Subscriber ID</th><th>Devices</th><th>Consent</th><th>Orders</th><th>Last seen</th></tr></thead><tbody id="contactsBody"><tr><td colspan="8" class="muted">Loading…</td></tr></tbody></table></div>
+            <div class="row-between" style="margin-top:12px;"><span class="muted" id="contactsNote"></span><div><button class="btn sm" id="contactsPrev">‹ Previous</button> <button class="btn sm" id="contactsNext">Next ›</button></div></div>
+          </div>
+          <div class="card hidden" id="contactDetail" style="margin-top:20px;"></div>
+        </section>
+
+        <!-- POPUPS -->
+        <section class="view" id="view-popups">
+          <div class="page-head">
+            <div><h1>Popups</h1><p>The subscribe popup shoppers see on your storefront. Pick a design, decide whether it also asks for a phone number or email, make it yours, save.</p></div>
+            <div class="head-actions"><button class="btn primary" id="popupSave" disabled><i class="fas fa-check"></i> Saved</button></div>
+          </div>
+          <div class="ok-box hidden" id="popupNotice" style="margin-bottom:16px;"></div>
+          <h2 class="section-title" style="margin-top:0;">Ready designs</h2>
+          <p class="muted" style="margin:-8px 0 14px;">One click applies the layout, colours and copy. Your logo, timing and brand line are kept.</p>
+          <div class="pp-gallery" id="popupGallery"><div class="muted">Loading designs…</div></div>
+          <div class="pp-editor" id="popupEditor"></div>
         </section>
 
         <!-- ANALYTICS / AUTOMATIONS (rendered by their modules) -->

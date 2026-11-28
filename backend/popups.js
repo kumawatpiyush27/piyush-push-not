@@ -16,6 +16,8 @@ const DEFAULTS = {
     show_bell: true, show_brand: true, delay: 5, later_days: 1, logo_url: '',
     // sheet / center extras
     ribbon_text: '', fine_print: '', success_title: "You're in! 🎉", success_message: 'Watch for our next offer on this device.', success_button: 'Continue',
+    // lead capture (phone / email before the browser prompt)
+    collect: 'none', collect_required: true, consent_text: 'Keep me posted about sales and offers', country: 'IN', reward_code: '',
 };
 
 // Each preset is a full look; the merchant's brand colour/logo/text can
@@ -36,7 +38,7 @@ const PRESETS = [
     { key: 'luxe', name: 'Luxe', blurb: 'Black and gold, quiet typography. Jewellery, beauty, decor.', tags: ['center', 'dark'],
       values: { layout: 'center', accent: '#d4af37', bg: '#0b0b0b', text: '#f5f1e6', header: 'none', radius: 8, show_bell: false, title: 'Private previews', message: 'New collections and members-only prices, before anyone else.', badge_text: '', allow_text: 'Join the list', later_text: 'Not now' } },
     { key: 'unlock', name: 'Unlock offers', blurb: 'Full-screen sheet on phones: ribbon, big logo, one button, then a code. The lead-capture look.', tags: ['sheet', 'offer', 'mobile'],
-      values: { layout: 'sheet', accent: '#111827', bg: '#ffffff', text: '#111827', header: 'none', radius: 24, show_bell: false, title: 'Unlock exclusive offers 👇', message: '', badge_text: '', allow_text: 'Get mystery offer', later_text: 'No thanks', ribbon_text: 'Get up to 60% off', fine_print: 'Keep me posted about sales and offers', success_title: 'Join the tribe', success_message: 'Use WELCOME5 for 5% off your first order', success_button: 'Continue' } },
+      values: { layout: 'sheet', accent: '#111827', bg: '#ffffff', text: '#111827', header: 'none', radius: 24, show_bell: false, title: 'Unlock exclusive offers 👇', message: '', badge_text: '', allow_text: 'Get mystery offer', later_text: 'No thanks', ribbon_text: 'Get up to 60% off', fine_print: '', collect: 'phone', collect_required: true, consent_text: 'Keep me posted about sales and offers', reward_code: 'WELCOME5', success_title: 'Join the tribe', success_message: 'Use WELCOME5 for 5% off your first order', success_button: 'Continue' } },
     { key: 'fresh', name: 'Fresh', blurb: 'Mint and white, bottom-left. Food, wellness, kids.', tags: ['corner', 'light'],
       values: { layout: 'corner', position: 'left', accent: '#10b981', bg: '#f0fdf4', text: '#064e3b', header: 'band', radius: 20, show_bell: true, title: 'Fresh drops and restocks 🌱', message: 'One tap and you never miss a restock again.' } },
 ];
@@ -73,6 +75,11 @@ function normalize(input, base) {
         success_title: i.success_title !== undefined ? clamp(i.success_title, 50) : b.success_title,
         success_message: i.success_message !== undefined ? clamp(i.success_message, 120) : b.success_message,
         success_button: i.success_button !== undefined ? (clamp(i.success_button, 24) || DEFAULTS.success_button) : b.success_button,
+        collect: ['none', 'phone', 'email', 'either'].indexOf(i.collect) !== -1 ? i.collect : b.collect,
+        collect_required: bool(i.collect_required, b.collect_required),
+        consent_text: i.consent_text !== undefined ? clamp(i.consent_text, 120) : b.consent_text,
+        country: /^[A-Za-z]{2}$/.test(String(i.country || '')) ? String(i.country).toUpperCase() : b.country,
+        reward_code: i.reward_code !== undefined ? clamp(i.reward_code, 40).toUpperCase() : b.reward_code,
     };
     if (!out.title) out.title = DEFAULTS.title;
     return out;

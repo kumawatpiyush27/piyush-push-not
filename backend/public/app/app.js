@@ -77,7 +77,7 @@
   }
 
   // ------------------------------------------------------------ router
-  var VIEWS = ['home', 'campaigns', 'creator', 'subscribers', 'segments', 'analytics', 'automations', 'plan', 'settings'];
+  var VIEWS = ['home', 'campaigns', 'creator', 'subscribers', 'segments', 'contacts', 'popups', 'analytics', 'automations', 'plan', 'settings'];
   var ALIAS = { dashboard: 'home', campaign: 'creator', history: 'campaigns', 'automation-editor': 'automations', audiences: 'segments', upgrade: 'plan', billing: 'plan', usage: 'plan' };
   var current = null;
   var loaders = {};
@@ -758,6 +758,187 @@
     });
   });
 
+  // ------------------------------------------------------------ contacts
+  var cState = { q: '', filter: 'all', offset: 0, limit: 50, rows: [] };
+  loaders.contacts = function () { loadContacts(); };
+  function consentBadges(c) {
+    return '<span class="consent-badges">' + [['push', c.push_consent || c.devices > 0], ['wa', c.whatsapp_consent], ['sms', c.sms_consent], ['email', c.email_consent]].map(function (x) { return '<span class="' + (x[1] ? 'on' : '') + '">' + x[0].toUpperCase() + '</span>'; }).join('') + '</span>';
+  }
+  function loadContacts() {
+    var qs = '?limit=' + cState.limit + '&offset=' + cState.offset + '&filter=' + encodeURIComponent(cState.filter) + (cState.q ? '&q=' + encodeURIComponent(cState.q) : '');
+    api('/my-store/contacts' + qs).then(function (r) {
+      document.querySelectorAll('#view-contacts .skel').forEach(function (el) { el.classList.remove('skel'); });
+      if (!r.ok || !r.data.success) { $('contactsBody').innerHTML = '<tr><td colspan="8" class="muted">Could not load contacts.</td></tr>'; return; }
+      var k = r.data.counts || {};
+      $('c-total').textContent = num(k.total); $('c-phone').textContent = num(k.with_phone); $('c-email').textContent = num(k.with_email); $('c-buyers').textContent = num(k.buyers);
+      $('c-phone-f').textContent = num(k.whatsapp) + ' with WhatsApp opt-in'; $('c-leads-f').textContent = num(k.leads_7d) + ' new leads in 7 days';
+      cState.rows = r.data.contacts || [];
+      $('contactsBody').innerHTML = cState.rows.length ? cState.rows.map(function (c) {
+        var name = [c.first_name, c.last_name].filter(Boolean).join(' ') || (c.customer_id ? 'Customer ' + c.customer_id : 'Anonymous subscriber');
+        return '<tr data-contact="' + c.id + '" style="cursor:pointer">' +
+          '<td class="contact-name"><b>' + esc(name) + '</b><small>#' + c.id + (c.source ? ' · ' + esc(c.source) : '') + '</small></td>' +
+          '<td>' + (c.phone ? esc(c.phone) : '<span class="muted">—</span>') + '</td><td>' + (c.email ? esc(c.email) : '<span class="muted">—</span>') + '</td>' +
+          '<td>' + (c.subscriber_id ? '<span class="chip">S-' + c.subscriber_id + '</span>' : '<span class="muted">—</span>') + '</td>' +
+          '<td>' + num(c.devices) + '</td><td>' + consentBadges(c) + '</td>' +
+          '<td>' + (c.orders_count ? num(c.orders_count) + ' · ' + money(c.total_spent, c.currency || 'INR') : '<span class="muted">0</span>') + '</td>' +
+          '<td>' + esc(ago(c.last_seen_at)) + '</td></tr>';
+      }).join('') : '<tr><td colspan="8" class="muted">No contacts match. Turn on "Collect phone & email" in Popups to start capturing leads.</td></tr>';
+      $('contactsNote').textContent = 'Showing ' + (cState.rows.length ? cState.offset + 1 : 0) + '–' + (cState.offset + cState.rows.length) + ' of ' + num(k.total) + (r.data.backfill && r.data.backfill.remaining ? ' · linking older subscribers, refresh for more' : '');
+      $('contactsPrev').disabled = cState.offset === 0; $('contactsNext').disabled = cState.rows.length < cState.limit;
+    });
+  }
+  $('contactTabs').addEventListener('click', function (e) { var b = e.target.closest('[data-f]'); if (!b) return; document.querySelectorAll('#contactTabs button').forEach(function (x) { x.classList.toggle('active', x === b); }); cState.filter = b.getAttribute('data-f'); cState.offset = 0; loadContacts(); });
+  var cSearchTimer; $('contactSearch').addEventListener('input', function () { clearTimeout(cSearchTimer); cSearchTimer = setTimeout(function () { cState.q = $('contactSearch').value.trim(); cState.offset = 0; loadContacts(); }, 300); });
+  $('contactsPrev').addEventListener('click', function () { cState.offset = Math.max(0, cState.offset - cState.limit); loadContacts(); });
+  $('contactsNext').addEventListener('click', function () { cState.offset += cState.limit; loadContacts(); });
+  $('contactsCsv').addEventListener('click', function (e) {
+    e.preventDefault();
+    window.fetch('/my-store/contacts.csv?filter=' + encodeURIComponent(cState.filter) + (cState.q ? '&q=' + encodeURIComponent(cState.q) : '')).then(function (r) { return r.blob(); }).then(function (b) {
+      var a = document.createElement('a'); a.href = URL.createObjectURL(b); a.download = 'contacts-' + window.store.id + '.csv'; document.body.appendChild(a); a.click(); a.remove();
+    });
+  });
+  $('contactsBody').addEventListener('click', function (e) {
+    var tr = e.target.closest('[data-contact]'); if (!tr) return;
+    api('/my-store/contacts/' + tr.getAttribute('data-contact')).then(function (r) {
+      if (!r.ok || !r.data.success) return toast('Could not load the contact.', 'err');
+      var c = r.data.contact, name = [c.first_name, c.last_name].filter(Boolean).join(' ') || 'Contact #' + c.id;
+      var box = $('contactDetail'); box.classList.remove('hidden');
+      box.innerHTML = '<div class="card-head"><div><h3>' + esc(name) + '</h3><div class="muted" style="font-size:12.5px">Contact #' + c.id + (c.customer_id ? ' · Shopify customer ' + esc(c.customer_id) : '') + ' · since ' + esc(dateShort(c.first_seen_at)) + '</div></div><button class="btn sm" id="contactClose">Close</button></div>' +
+        '<div class="cd-grid">' +
+        '<div><h4>Identity</h4><ul class="cd-list"><li><span>Phone</span><b>' + esc(c.phone || '—') + '</b></li><li><span>Email</span><b>' + esc(c.email || '—') + '</b></li><li><span>Consent</span>' + consentBadges(c) + '</li><li><span>Source</span><b>' + esc(c.source || 'push') + '</b></li><li><span>Orders</span><b>' + num(c.orders_count) + ' · ' + money(c.total_spent, c.currency || 'INR') + '</b></li></ul></div>' +
+        '<div><h4>Devices (' + r.data.devices.length + ')</h4><ul class="cd-list">' + (r.data.devices.map(function (d) { return '<li><span>S-' + d.id + ' · ' + esc(d.browser) + '</span><b>' + esc(d.status) + ' · ' + esc(ago(d.last_seen_at || d.created_at)) + '</b></li>'; }).join('') || '<li class="muted">No push devices</li>') + '</ul></div>' +
+        '<div><h4>Timeline</h4><ul class="cd-list">' + (r.data.events.map(function (ev) { return '<li><span>' + esc(ev.kind) + '</span><b>' + esc(ago(ev.at)) + '</b></li>'; }).join('') || '<li class="muted">No events yet</li>') + '</ul></div>' +
+        '</div>';
+      box.scrollIntoView({ behavior: 'smooth', block: 'start' });
+      $('contactClose').addEventListener('click', function () { box.classList.add('hidden'); });
+    });
+  });
+
+  // ------------------------------------------------------------ popups designer
+  // CSS mirrors extensions/push-notification-popup/blocks/popup.liquid (.rp-*) so the preview is the real popup.
+  var RP_CSS = '.rp-scope .rp{position:absolute;font-family:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,sans-serif;color:var(--rp-text);background:var(--rp-bg);border-radius:var(--rp-radius);box-shadow:0 20px 60px rgba(0,0,0,.18),0 4px 16px rgba(0,0,0,.12);overflow:hidden;width:320px;max-width:calc(100% - 24px);z-index:5}' +
+    '.rp-scope .rp.rp-corner{bottom:16px;right:16px}.rp-scope .rp.rp-corner.rp-left{right:auto;left:16px}.rp-scope .rp.rp-center{left:50%;top:50%;transform:translate(-50%,-50%);width:360px}' +
+    '.rp-scope .rp.rp-topbar{top:0;left:0;right:0;width:auto;max-width:none;border-radius:0;box-shadow:0 6px 24px rgba(0,0,0,.15)}.rp-scope .rp-shade{position:absolute;inset:0;background:rgba(17,24,39,.45);z-index:4}' +
+    '.rp-scope .rp-head{display:flex;align-items:center;gap:10px;padding:12px 14px;color:#fff;background:var(--rp-accent);position:relative}.rp-scope .rp-head.rp-gradient{background:linear-gradient(120deg,var(--rp-accent),#f97316)}.rp-scope .rp-head.rp-none{background:transparent;color:var(--rp-text);padding-bottom:0}' +
+    '.rp-scope .rp-logo{width:36px;height:36px;border-radius:9px;object-fit:cover;background:rgba(255,255,255,.25);flex-shrink:0}.rp-scope .rp-store{font-weight:700;font-size:14px;flex:1}.rp-scope .rp-x{width:26px;height:26px;border-radius:50%;background:rgba(127,127,127,.25);display:inline-flex;align-items:center;justify-content:center;font-size:13px;line-height:1;flex-shrink:0}' +
+    '.rp-scope .rp-body{padding:16px 16px 12px}.rp-scope .rp-center .rp-body{padding:18px 20px 16px;text-align:center}.rp-scope .rp-center .rp-head{justify-content:center}.rp-scope .rp-center .rp-head .rp-x{position:absolute;top:10px;right:10px}.rp-scope .rp-center .rp-logo{width:56px;height:56px;border-radius:14px}.rp-scope .rp-center .rp-store{display:none}' +
+    '.rp-scope .rp-title{display:flex;align-items:center;gap:8px;font-size:16px;font-weight:700;line-height:1.3;margin:0}.rp-scope .rp-center .rp-title{justify-content:center;font-size:18px}.rp-scope .rp-bell{font-size:24px;display:inline-block}' +
+    '.rp-scope .rp-msg{font-size:13px;margin:6px 0 0;opacity:.78;line-height:1.5}.rp-scope .rp-badge{display:inline-flex;align-items:center;gap:6px;background:linear-gradient(135deg,#fff3cd,#ffe08a);border:1px solid #f0c040;border-radius:8px;padding:7px 12px;margin:12px 0 0;font-size:12px;font-weight:700;color:#7c5200}' +
+    '.rp-scope .rp-field{display:flex;align-items:center;gap:6px;margin-top:14px;border:1px solid rgba(127,127,127,.35);border-radius:10px;padding:10px 12px;font-size:14px;background:rgba(255,255,255,.6);color:inherit;text-align:left}.rp-scope .rp-field small{opacity:.6}' +
+    '.rp-scope .rp-actions{display:flex;gap:8px;margin-top:14px}.rp-scope .rp-center .rp-actions{flex-direction:column}.rp-scope .rp-allow{background:var(--rp-accent);color:var(--rp-on-accent);border:0;padding:11px 16px;border-radius:calc(var(--rp-radius) * .6 + 4px);font-weight:700;font-size:13px;flex:1;text-align:center}' +
+    '.rp-scope .rp-later{background:transparent;border:1px solid rgba(127,127,127,.35);padding:11px 14px;border-radius:calc(var(--rp-radius) * .6 + 4px);font-size:12px;opacity:.7;text-align:center}.rp-scope .rp-brand{text-align:center;margin-top:12px;font-size:10px;opacity:.6;letter-spacing:.3px}' +
+    '.rp-scope .rp-topbar .rp-head{display:none}.rp-scope .rp-topbar .rp-body{display:flex;align-items:center;gap:14px;padding:10px 16px}.rp-scope .rp-topbar .rp-msg{margin:0;flex:1}.rp-scope .rp-topbar .rp-title{font-size:14px;white-space:nowrap}.rp-scope .rp-topbar .rp-badge,.rp-scope .rp-topbar .rp-brand,.rp-scope .rp-topbar .rp-field,.rp-scope .rp-topbar .rp-fine{display:none}.rp-scope .rp-topbar .rp-actions{margin:0}.rp-scope .rp-topbar .rp-allow{padding:8px 14px;flex:none}.rp-scope .rp-topbar .rp-later{padding:8px 10px}' +
+    '.rp-scope .rp.rp-sheet{left:50%;top:50%;transform:translate(-50%,-50%);width:380px;text-align:center}.rp-scope .rp-sheet .rp-ribbon{background:#111827;color:#fff;font-size:12px;font-weight:600;text-align:center;padding:7px 12px}.rp-scope .rp-sheet .rp-head{justify-content:center;padding:22px 16px 6px;background:transparent;color:var(--rp-text)}.rp-scope .rp-sheet .rp-head .rp-x{position:absolute;top:10px;right:10px}.rp-scope .rp-sheet .rp-logo{width:96px;height:56px;border-radius:0;object-fit:contain;background:transparent}.rp-scope .rp-sheet .rp-store{display:none}' +
+    '.rp-scope .rp-sheet .rp-body{padding:8px 22px 18px}.rp-scope .rp-sheet .rp-title{justify-content:center;font-size:20px;font-weight:600}.rp-scope .rp-sheet .rp-actions{flex-direction:column;margin-top:16px}.rp-scope .rp-sheet .rp-allow{padding:15px 16px;font-size:15px;border-radius:12px}.rp-scope .rp-sheet .rp-later{border:0;opacity:.55;padding:6px}' +
+    '.rp-scope .rp-fine{display:none;font-size:11.5px;opacity:.7;margin-top:10px}.rp-scope .rp-sheet .rp-fine,.rp-scope .rp-center .rp-fine{display:block}.rp-scope .rp-fine::before{content:"☑ "}' +
+    '.rp-scope.phone .rp,.rp-scope.phone .rp.rp-corner,.rp-scope.phone .rp.rp-center,.rp-scope.phone .rp.rp-sheet{left:0;right:0;bottom:0;top:auto;transform:none;width:auto;max-width:none;border-radius:var(--rp-radius) var(--rp-radius) 0 0}.rp-scope.phone .rp.rp-topbar{top:0;bottom:auto;border-radius:0}';
+  var ppData = null, pp = null, ppDirty = false, ppMobile = false;
+  function onAccent(hex) { var m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex || ''); if (!m) return '#fff'; var r = parseInt(m[1], 16) / 255, g = parseInt(m[2], 16) / 255, b = parseInt(m[3], 16) / 255; return (0.2126 * r + 0.7152 * g + 0.0722 * b) > 0.6 ? '#111827' : '#ffffff'; }
+  function popupMarkup(d, storeLogo) {
+    var logo = d.logo_url || storeLogo || 'https://push-retner.vercel.app/logo.png';
+    var style = '--rp-accent:' + d.accent + ';--rp-bg:' + d.bg + ';--rp-text:' + d.text + ';--rp-radius:' + d.radius + 'px;--rp-on-accent:' + onAccent(d.accent);
+    var field = d.collect && d.collect !== 'none' ? '<div class="rp-field">' + (d.collect === 'email' ? '✉️ <small>you@email.com</small>' : (d.collect === 'either' ? '📱 <small>Phone or email</small>' : '🇮🇳 +91 <small>98765 43210</small>')) + '</div>' : '';
+    var fine = d.collect && d.collect !== 'none' ? (d.consent_text || '') : (d.fine_print || '');
+    return ((d.layout === 'center' || d.layout === 'sheet') ? '<div class="rp-shade"></div>' : '') +
+      '<div class="rp rp-' + esc(d.layout) + (d.position === 'left' ? ' rp-left' : '') + '" style="' + style + '">' +
+      (d.layout === 'sheet' && d.ribbon_text ? '<div class="rp-ribbon">' + esc(d.ribbon_text) + '</div>' : '') +
+      '<div class="rp-head rp-' + esc(d.header) + '"><img class="rp-logo" src="' + esc(logo) + '" alt=""><span class="rp-store">' + esc(window.store.name || window.store.id) + '</span><span class="rp-x">✕</span></div>' +
+      '<div class="rp-body"><p class="rp-title">' + (d.show_bell ? '<span class="rp-bell">🔔</span>' : '') + '<span>' + esc(d.title) + '</span></p>' +
+      (d.message ? '<p class="rp-msg">' + esc(d.message) + '</p>' : '') + (d.badge_text ? '<div class="rp-badge"><span>🎁</span>' + esc(d.badge_text) + '</div>' : '') + field +
+      '<div class="rp-actions"><span class="rp-allow">' + (d.show_bell ? '🔔 ' : '') + esc(d.allow_text) + '</span><span class="rp-later">' + esc(d.later_text) + '</span></div>' +
+      (fine ? '<div class="rp-fine">' + esc(fine) + '</div>' : '') + (d.show_brand ? '<div class="rp-brand">Powered by Retner.ai</div>' : '') + '</div></div>';
+  }
+  function previewHtml(d, storeLogo, mobile) {
+    return '<div class="rp-scope ' + (mobile ? 'phone' : 'frame') + '">' + (mobile ? '' : '<div class="rp-bar"><i style="background:#f87171"></i><i style="background:#fbbf24"></i><i style="background:#34d399"></i><span class="url">🔒 ' + esc(window.store.id) + '.myshopify.com</span></div>') +
+      '<div class="rp-stage" style="height:' + (mobile ? 520 : 360) + 'px"><div class="rp-skel"><i></i><div><b></b><b></b><b></b></div></div>' + popupMarkup(d, storeLogo) + '</div></div>';
+  }
+  loaders.popups = function () { if (!document.getElementById('rpCss')) { var st = document.createElement('style'); st.id = 'rpCss'; st.textContent = RP_CSS; document.head.appendChild(st); } loadPopups(); };
+  function loadPopups() {
+    api('/my-store/popup').then(function (r) {
+      if (!r.ok || !r.data.success) { $('popupGallery').innerHTML = '<div class="muted">Could not load designs.</div>'; return; }
+      ppData = r.data; pp = r.data.settings; ppDirty = false;
+      var nb = $('popupNotice'); nb.classList.toggle('hidden', !!r.data.saved);
+      nb.innerHTML = '<i class="fas fa-circle-info"></i> No design chosen yet: your storefront shows the theme-editor popup. Pick any design below and it goes live within 5 minutes.';
+      renderGallery(); renderEditor();
+    });
+  }
+  function renderGallery() {
+    $('popupGallery').innerHTML = ppData.presets.map(function (p) {
+      var cur = pp.preset === p.key;
+      return '<div class="pp-card' + (cur ? ' current' : '') + '"><div class="pp-thumb"><div class="rp-scope">' + popupMarkup(p.settings, ppData.store_logo) + '</div></div>' +
+        '<div class="row-between"><b>' + esc(p.name) + '</b>' + (cur ? '<span class="chip ok">In use</span>' : '<span class="chip">' + esc(p.settings.layout) + (p.settings.collect !== 'none' ? ' · leads' : '') + '</span>') + '</div>' +
+        '<span class="blurb">' + esc(p.blurb) + '</span><button class="btn sm' + (cur ? '' : ' primary') + '" data-preset="' + esc(p.key) + '"' + (cur ? ' disabled' : '') + '>' + (cur ? 'Current design' : 'Use this design') + '</button></div>';
+    }).join('');
+  }
+  function fld(label, key, type, extra) {
+    extra = extra || {};
+    var v = pp[key] == null ? '' : pp[key];
+    if (type === 'select') return '<div class="field"><label>' + label + '</label><select class="input" data-pp="' + key + '">' + extra.options.map(function (o) { return '<option value="' + esc(o[0]) + '"' + (String(v) === String(o[0]) ? ' selected' : '') + '>' + esc(o[1]) + '</option>'; }).join('') + '</select></div>';
+    if (type === 'check') return '<label class="row-between" style="margin-bottom:10px;"><span>' + label + '</span><input type="checkbox" data-pp="' + key + '"' + (v ? ' checked' : '') + '></label>';
+    if (type === 'range') return '<div class="field"><label>' + label + ' · <b data-pp-val="' + key + '">' + esc(v) + '</b></label><input type="range" data-pp="' + key + '" min="' + extra.min + '" max="' + extra.max + '" value="' + esc(v) + '" style="width:100%"></div>';
+    if (type === 'textarea') return '<div class="field"><label>' + label + '</label><textarea class="input" data-pp="' + key + '" maxlength="' + (extra.max || 160) + '" rows="2">' + esc(v) + '</textarea></div>';
+    return '<div class="field"><label>' + label + '</label><input class="input" data-pp="' + key + '" maxlength="' + (extra.max || 60) + '" value="' + esc(v) + '" placeholder="' + esc(extra.ph || '') + '"></div>';
+  }
+  function renderEditor() {
+    var sheetish = pp.layout === 'sheet' || pp.layout === 'center';
+    $('popupEditor').innerHTML = '<div class="card"><h3>Make it yours</h3>' +
+      fld('Layout', 'layout', 'select', { options: [['corner', 'Corner card'], ['center', 'Centered'], ['topbar', 'Top bar'], ['sheet', 'Offer sheet (full-screen on phones)']] }) +
+      (pp.layout === 'corner' ? fld('Corner', 'position', 'select', { options: [['right', 'Bottom right'], ['left', 'Bottom left']] }) : '') +
+      '<div class="field"><label>Colours</label><div class="pp-colors"><div><input type="color" data-pp="accent" value="' + esc(pp.accent) + '"><div class="help">Brand</div></div><div><input type="color" data-pp="bg" value="' + esc(pp.bg) + '"><div class="help">Background</div></div><div><input type="color" data-pp="text" value="' + esc(pp.text) + '"><div class="help">Text</div></div></div></div>' +
+      (pp.layout !== 'topbar' && pp.layout !== 'sheet' ? fld('Header', 'header', 'select', { options: [['band', 'Brand colour band'], ['gradient', 'Gradient band'], ['none', 'No band']] }) : '') +
+      fld('Corner roundness (px)', 'radius', 'range', { min: 0, max: 32 }) +
+      '<h3 style="margin-top:18px">Collect phone &amp; email</h3><p class="sub">Ask for a contact before the browser prompt. The lead is saved even if notifications are blocked (iPhone, in-app browsers), and shows in Contacts.</p>' +
+      fld('Ask for', 'collect', 'select', { options: [['none', 'Nothing (push only)'], ['phone', 'Phone number'], ['email', 'Email'], ['either', 'Phone or email']] }) +
+      (pp.collect !== 'none' ? fld('Required before continuing', 'collect_required', 'check') + fld('Consent text (shown with a tick)', 'consent_text', 'text', { max: 120 }) + fld('Default country', 'country', 'select', { options: [['IN', 'India (+91)'], ['US', 'United States (+1)'], ['GB', 'United Kingdom (+44)'], ['AE', 'UAE (+971)'], ['SG', 'Singapore (+65)'], ['AU', 'Australia (+61)']] }) + fld('Reward code shown after', 'reward_code', 'text', { max: 40, ph: 'WELCOME5' }) : '') +
+      '<h3 style="margin-top:18px">Text</h3>' + fld('Title', 'title', 'text') + fld('Message', 'message', 'textarea') +
+      '<div class="pp-colors" style="grid-template-columns:1fr 1fr">' + fld('Allow button', 'allow_text', 'text', { max: 30 }) + fld('Later button', 'later_text', 'text', { max: 20 }) + '</div>' +
+      fld('Offer badge (optional)', 'badge_text', 'text') +
+      (pp.layout === 'sheet' ? fld('Top ribbon (optional)', 'ribbon_text', 'text', { max: 40, ph: 'Get up to 60% off' }) : '') +
+      (sheetish && pp.collect === 'none' ? fld('Fine print under the button', 'fine_print', 'text', { max: 90 }) : '') +
+      (sheetish ? '<h3 style="margin-top:18px">After they allow</h3>' + fld('Success title', 'success_title', 'text', { max: 50 }) + fld('Success message (put the code here)', 'success_message', 'text', { max: 120 }) + fld('Success button', 'success_button', 'text', { max: 24 }) : '') +
+      '<h3 style="margin-top:18px">Logo &amp; timing</h3><div class="field"><label>Logo in the popup</label><input type="hidden" id="ppLogo" value="' + esc(pp.logo_url || '') + '"><div data-media-for="ppLogo" data-purpose="logo" data-max-side="512" data-hint="empty = your store logo"></div></div>' +
+      fld('Show after (seconds on the page)', 'delay', 'range', { min: 0, max: 60 }) + fld('"Later" hides it for (days)', 'later_days', 'range', { min: 0, max: 30 }) +
+      fld('Animated bell', 'show_bell', 'check') + fld('Show "Powered by Retner.ai"', 'show_brand', 'check') +
+      '<button class="btn primary block" id="popupSave2"' + (ppDirty ? '' : ' disabled') + '><i class="fas fa-check"></i> Save changes</button></div>' +
+      '<div class="pp-preview-wrap"><div class="card"><div class="card-head"><h3>Live preview</h3><div class="seg pp-device"><button data-dev="desktop"' + (ppMobile ? '' : ' class="active"') + '>Desktop</button><button data-dev="phone"' + (ppMobile ? ' class="active"' : '') + '>Phone</button></div></div><div id="ppPreview">' + previewHtml(pp, ppData.store_logo, ppMobile) + '</div><p class="sub" style="margin-top:10px">On phones every layout opens as a sheet from the bottom. When "Ask for" is on, the shopper types the number first, then the browser asks for notification permission.</p></div></div>';
+    if (window.RetnerMedia) window.RetnerMedia.attachAll($('popupEditor'));
+    $('ppLogo').addEventListener('change', function () { pp.logo_url = $('ppLogo').value; markDirty(); refreshPreview(); });
+  }
+  function refreshPreview() { var el = $('ppPreview'); if (el) el.innerHTML = previewHtml(pp, ppData.store_logo, ppMobile); }
+  function markDirty() { ppDirty = true; var b1 = $('popupSave'), b2 = $('popupSave2'); [b1, b2].forEach(function (b) { if (b) { b.disabled = false; b.innerHTML = '<i class="fas fa-check"></i> Save changes'; } }); }
+  var RERENDER = { layout: 1, collect: 1 };
+  $('popupEditor').addEventListener('input', function (e) {
+    var el = e.target.closest('[data-pp]'); if (!el) return;
+    var key = el.getAttribute('data-pp');
+    pp[key] = el.type === 'checkbox' ? el.checked : (el.type === 'range' ? Number(el.value) : el.value);
+    var lab = $('popupEditor').querySelector('[data-pp-val="' + key + '"]'); if (lab) lab.textContent = el.value;
+    markDirty();
+    if (RERENDER[key]) renderEditor(); else refreshPreview();
+  });
+  $('popupEditor').addEventListener('click', function (e) {
+    var d = e.target.closest('[data-dev]'); if (d) { ppMobile = d.getAttribute('data-dev') === 'phone'; document.querySelectorAll('.pp-device button').forEach(function (b) { b.classList.toggle('active', b === d); }); refreshPreview(); return; }
+    if (e.target.closest('#popupSave2')) savePopup();
+  });
+  $('popupSave').addEventListener('click', savePopup);
+  function savePopup() {
+    var b = $('popupSave'); b.disabled = true; b.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving…';
+    api('/my-store/popup', { method: 'POST', body: pp }).then(function (r) {
+      if (!r.ok || !r.data.success) { b.disabled = false; b.innerHTML = '<i class="fas fa-check"></i> Save changes'; return toast(r.data.error || 'Could not save.', 'err'); }
+      pp = r.data.settings; ppDirty = false; ppData.saved = true; $('popupNotice').classList.add('hidden');
+      b.innerHTML = '<i class="fas fa-check"></i> Saved'; renderGallery(); renderEditor();
+      toast('Saved. Shoppers see the new popup within 5 minutes.', 'ok');
+    });
+  }
+  $('popupGallery').addEventListener('click', function (e) {
+    var b = e.target.closest('[data-preset]'); if (!b) return;
+    b.disabled = true; b.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Applying…';
+    api('/my-store/popup', { method: 'POST', body: { apply_preset: b.getAttribute('data-preset') } }).then(function (r) {
+      if (!r.ok || !r.data.success) { b.disabled = false; b.textContent = 'Use this design'; return toast(r.data.error || 'Could not apply.', 'err'); }
+      pp = r.data.settings; ppDirty = false; ppData.saved = true; $('popupNotice').classList.add('hidden'); $('popupSave').innerHTML = '<i class="fas fa-check"></i> Saved'; $('popupSave').disabled = true;
+      renderGallery(); renderEditor(); toast('Design applied. It is live on your storefront within 5 minutes.', 'ok');
+    });
+  });
+
   // ------------------------------------------------------------ ideas feed
   var ideasItems = [], ideasThemeUrl = '';
   function tipEvent(id, kind, surface) { api('/my-store/tips/' + id + '/event', { method: 'POST', body: { kind: kind, surface: surface || current } }); }
@@ -880,6 +1061,8 @@
     { view: 'creator', target: '#btnSend', place: 'above', title: 'Send now or schedule', text: 'Send immediately or pick a date and time. Flash sales can have an end time so late shoppers are not notified about an offer that is over.' },
     { view: 'automations', target: '#automations-root .ra-grid .ra-auto', place: 'right', title: 'Automations run on their own', text: 'Turn on <b>Welcome</b> first (greets every new subscriber), then <b>Cart recovery</b> with a delay and discount. Browse abandonment, win-back, order thank-you, price drop and back-in-stock each have their own text, timing and test button.' },
     { view: 'subscribers', target: '#view-subscribers .kpis', place: 'below', title: 'Watch your audience grow', text: 'Who subscribed, from which browser, when they were last seen, and how sign-ups grow day by day. The Segments card previews the audiences you can target.' },
+    { view: 'popups', target: '#popupGallery .pp-card', place: 'right', title: 'Design your subscribe popup', text: 'Nine ready designs, one click to apply. Turn on <b>Collect phone &amp; email</b> and the popup asks for a number before the browser prompt, so you capture a lead even when notifications are blocked.' },
+    { view: 'contacts', target: '#view-contacts .kpis', place: 'below', title: 'Every person in one place', text: 'Contacts joins all of a shopper\'s devices with the phone, email and orders we learn from the popup, logins and checkouts. Export to CSV or use it in Retner for WhatsApp and SMS.' },
     { view: 'segments', target: '#segBehaviour .seg-tile', place: 'right', title: 'Ready-made segments', text: 'Counted live from visits, carts and orders. Click <b>Send campaign</b> on any segment to open the creator with that audience selected. On the Free plan the counts stay visible and the cards unlock with an upgrade.' },
     { view: 'analytics', target: '#analytics-root .ra2-kpis', place: 'below', title: 'Measure what worked', text: 'Sends, clicks, click rate and attributed revenue over time, plus your best campaigns and automations. Switch tabs for campaigns, automations and the live event feed.' },
     { view: 'plan', target: '#tiers .tier.recommended, #tiers .tier', place: 'left', title: 'Plans in one place', text: '<b>Free</b> includes 10,000 impressions a month. <b>Growth ($30)</b> adds more and unlocks segments; <b>Unlimited ($50)</b> has no cap. Pick your plan when the trial ends; it applies right away.' },

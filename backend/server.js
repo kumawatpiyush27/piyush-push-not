@@ -19,6 +19,7 @@ const plans = require('./plans');
 const entitlements = require('./entitlements');
 const tips = require('./tips');
 const popups = require('./popups');
+const profiles = require('./profiles');
 
 const app = express();
 
@@ -161,7 +162,14 @@ const verifyShopifyWebhook = (req, res, next) => {
 };
 
 // MANDATORY GDPR WEBHOOKS
-app.post('/webhooks/shopify/redact/customer', verifyShopifyWebhook, (req, res) => res.status(200).send());
+app.post('/webhooks/shopify/redact/customer', verifyShopifyWebhook, async (req, res) => {
+    try {
+        const b = req.body || {}; const shop = String(b.shop_domain || req.headers['x-shopify-shop-domain'] || '').split('.')[0].toLowerCase();
+        const c = b.customer || {};
+        if (shop) await profiles.redact(getPool(), shop, { customerId: c.id, email: c.email, phone: c.phone });
+    } catch (e) { console.error('Customer redact error:', e.message); }
+    res.status(200).send();
+});
 app.post('/webhooks/shopify/redact/shop', verifyShopifyWebhook, (req, res) => res.status(200).send());
 app.post('/webhooks/shopify/data/customer', verifyShopifyWebhook, (req, res) => res.status(200).send());
 
@@ -180,6 +188,19 @@ app.post('/webhooks/shopify/order', verifyShopifyWebhook, async (req, res) => {
                 await db.query(`UPDATE push_carts SET status = 'purchased' WHERE cart_token = $1 AND status = 'active'`, [token]);
             }
         } catch(err) { console.error('Failed to mark cart purchased:', err.message); }
+
+        // 0b. Attach the order's email/phone/customer to the shopper's contact profile
+        try {
+            const shopDomainForStore = req.headers['x-shopify-shop-domain'];
+            const storeIdForOrder = shopDomainForStore ? String(shopDomainForStore).split('.')[0].toLowerCase() : null;
+            if (storeIdForOrder) {
+                const token = automations.normalizeCartToken(cart_token);
+                let endpointHint = null;
+                if (token) { const r = await db.query('SELECT endpoint FROM push_carts WHERE cart_token = $1 ORDER BY updated_at DESC LIMIT 1', [token]); endpointHint = r.rows[0] ? r.rows[0].endpoint : null; }
+                if (!endpointHint && token) { const r2 = await db.query('SELECT endpoint FROM subscriptions WHERE store_id = $1 AND cart_token = $2 LIMIT 1', [storeIdForOrder, token]); endpointHint = r2.rows[0] ? r2.rows[0].endpoint : null; }
+                await profiles.fromOrder(db, storeIdForOrder, req.body, endpointHint);
+            }
+        } catch (pe) { console.error('Profile from order failed:', pe.message); }
 
         // 1. Identify Campaign
         let campaignId = null;
@@ -675,6 +696,41 @@ app.post('/my-store/popup', async (req, res) => {
         const settings = await popups.save(getPool(), req.storeId, req.body || {});
         res.json({ success: true, settings });
     } catch (e) { console.error('Popup save error:', e.message); res.status(e.status || 500).json({ success: false, error: e.status ? e.message : 'Could not save the popup design' }); }
+});
+
+// Contacts (see profiles.js): one row per person; subscribers get a profile on first open.
+app.get('/my-store/contacts', async (req, res) => {
+    try {
+        const db = getPool();
+        const bf = await profiles.backfill(db, req.storeId, 500);
+        const r = await profiles.list(db, req.storeId, { q: req.query.q, filter: req.query.filter, limit: req.query.limit, offset: req.query.offset });
+        res.json(Object.assign({ success: true, backfill: bf }, r));
+    } catch (e) { console.error('Contacts error:', e.message); res.status(500).json({ success: false, error: 'Could not load contacts' }); }
+});
+app.get('/my-store/contacts.csv', async (req, res) => {
+    try {
+        const r = await profiles.list(getPool(), req.storeId, { q: req.query.q, filter: req.query.filter, limit: 200, offset: 0 });
+        let rows = r.contacts, off = 200;
+        while (rows.length < 20000) { const more = await profiles.list(getPool(), req.storeId, { q: req.query.q, filter: req.query.filter, limit: 200, offset: off }); if (!more.contacts.length) break; rows = rows.concat(more.contacts); off += 200; }
+        res.set('Content-Type', 'text/csv; charset=utf-8'); res.set('Content-Disposition', `attachment; filename="contacts-${req.storeId}.csv"`);
+        res.send(profiles.csv(rows));
+    } catch (e) { console.error('Contacts csv error:', e.message); res.status(500).send('error'); }
+});
+app.get('/my-store/contacts/:id', async (req, res) => {
+    try { res.json(Object.assign({ success: true }, await profiles.get(getPool(), req.storeId, req.params.id))); }
+    catch (e) { res.status(e.status || 500).json({ success: false, error: e.status ? e.message : 'Could not load the contact' }); }
+});
+// Storefront lead (popup phone/email) and login identification, relayed by the Shopify app with its app token.
+app.post('/my-store/lead', async (req, res) => {
+    try {
+        const b = req.body || {};
+        const r = await profiles.fromLead(getPool(), req.storeId, { phone: b.phone, email: b.email, name: b.name, consent: b.consent, consentText: b.consent_text, endpoint: b.endpoint, customerId: b.customer_id, country: b.country, page: b.page });
+        res.json({ success: true, contact_id: r.id });
+    } catch (e) { res.status(e.status || 500).json({ success: false, error: e.status ? e.message : 'Could not save' }); }
+});
+app.post('/my-store/identify', async (req, res) => {
+    try { const r = await profiles.identify(getPool(), req.storeId, { endpoint: req.body && req.body.endpoint, customerId: req.body && req.body.customer_id }); res.json({ success: true, contact_id: r ? r.id : null }); }
+    catch (e) { res.status(e.status || 500).json({ success: false, error: 'Could not save' }); }
 });
 
 // Ideas feed (see tips.js): ?surface=home|loading|creator|app, ?n=1..6
