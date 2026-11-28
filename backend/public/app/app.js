@@ -832,87 +832,133 @@
     '.ppv-scope .ppv-sheet .ppv-body{padding:8px 22px 18px}.ppv-scope .ppv-sheet .ppv-title{justify-content:center;font-size:20px;font-weight:600}.ppv-scope .ppv-sheet .ppv-actions{flex-direction:column;margin-top:16px}.ppv-scope .ppv-sheet .ppv-allow{padding:15px 16px;font-size:15px;border-radius:12px}.ppv-scope .ppv-sheet .ppv-later{border:0;opacity:.55;padding:6px}' +
     '.ppv-scope .ppv-fine{display:none;font-size:11.5px;opacity:.7;margin-top:10px}.ppv-scope .ppv-sheet .ppv-fine,.ppv-scope .ppv-center .ppv-fine{display:block}.ppv-scope .ppv-fine::before{content:"☑ "}' +
     '.ppv-scope.phone .rp,.ppv-scope.phone .rp.ppv-corner,.ppv-scope.phone .rp.ppv-center,.ppv-scope.phone .rp.ppv-sheet{left:0;right:0;bottom:0;top:auto;transform:none;width:auto;max-width:none;border-radius:var(--ppv-radius) var(--ppv-radius) 0 0}.ppv-scope.phone .rp.ppv-topbar{top:0;bottom:auto;border-radius:0}';
-  var ppData = null, pp = null, ppDirty = false, ppMobile = false;
+  var ppData = null, ppKind = 'push', ppDirty = false, ppMobile = false;
+  function pp() { return ppData ? ppData[ppKind] : null; }
   function onAccent(hex) { var m = /^#([0-9a-f]{2})([0-9a-f]{2})([0-9a-f]{2})$/i.exec(hex || ''); if (!m) return '#fff'; var r = parseInt(m[1], 16) / 255, g = parseInt(m[2], 16) / 255, b = parseInt(m[3], 16) / 255; return (0.2126 * r + 0.7152 * g + 0.0722 * b) > 0.6 ? '#111827' : '#ffffff'; }
-  function popupMarkup(d, storeLogo) {
+  // One renderer for both popups: `kind` decides the body (Allow/Later vs field + button).
+  function popupMarkup(d, kind, storeLogo) {
     var logo = d.logo_url || storeLogo || 'https://push-retner.vercel.app/logo.png';
     var style = '--ppv-accent:' + d.accent + ';--ppv-bg:' + d.bg + ';--ppv-text:' + d.text + ';--ppv-radius:' + d.radius + 'px;--ppv-on-accent:' + onAccent(d.accent);
-    var field = d.collect && d.collect !== 'none' ? '<div class="ppv-field">' + (d.collect === 'email' ? '✉️ <small>you@email.com</small>' : (d.collect === 'either' ? '📱 <small>Phone or email</small>' : '🇮🇳 +91 <small>98765 43210</small>')) + '</div>' : '';
-    var fine = d.collect && d.collect !== 'none' ? (d.consent_text || '') : (d.fine_print || '');
+    var header = kind === 'lead' ? 'none' : (d.header || 'band');
+    var body;
+    if (kind === 'lead') {
+      var cc = { IN: '+91', US: '+1', GB: '+44', AE: '+971', SG: '+65', AU: '+61' }[d.country || 'IN'] || '+91';
+      body = '<p class="ppv-title"><span>' + esc(d.title) + '</span></p>' + (d.message ? '<p class="ppv-msg">' + esc(d.message) + '</p>' : '') +
+        '<div class="ppv-field">' + (d.collect === 'email' ? '✉️ <small>you@email.com</small>' : (d.collect === 'either' ? '📱 <small>Phone number or email</small>' : esc(cc) + ' <small>98765 43210</small>')) + '</div>' +
+        (d.consent_text ? '<div class="ppv-fine">' + esc(d.consent_text) + '</div>' : '') +
+        '<div class="ppv-actions"><span class="ppv-allow">' + esc(d.button_text) + '</span><span class="ppv-later">' + esc(d.skip_text) + '</span></div>' +
+        (d.show_brand ? '<div class="ppv-brand">Powered by Retner.ai</div>' : '');
+    } else {
+      body = '<p class="ppv-title">' + (d.show_bell ? '<span class="ppv-bell">🔔</span>' : '') + '<span>' + esc(d.title) + '</span></p>' +
+        (d.message ? '<p class="ppv-msg">' + esc(d.message) + '</p>' : '') + (d.badge_text ? '<div class="ppv-badge"><span>🎁</span>' + esc(d.badge_text) + '</div>' : '') +
+        '<div class="ppv-actions"><span class="ppv-allow">' + (d.show_bell ? '🔔 ' : '') + esc(d.allow_text) + '</span><span class="ppv-later">' + esc(d.later_text) + '</span></div>' +
+        (d.fine_print ? '<div class="ppv-fine">' + esc(d.fine_print) + '</div>' : '') + (d.show_brand ? '<div class="ppv-brand">Powered by Retner.ai</div>' : '');
+    }
     return ((d.layout === 'center' || d.layout === 'sheet') ? '<div class="ppv-shade"></div>' : '') +
-      '<div class="rp ppv-' + esc(d.layout) + (d.position === 'left' ? ' ppv-left' : '') + '" style="' + style + '">' +
+      '<div class="ppv ppv-' + esc(d.layout) + (d.position === 'left' ? ' ppv-left' : '') + '" style="' + style + '">' +
       (d.layout === 'sheet' && d.ribbon_text ? '<div class="ppv-ribbon">' + esc(d.ribbon_text) + '</div>' : '') +
-      '<div class="ppv-head ppv-' + esc(d.header) + '"><img class="ppv-logo" src="' + esc(logo) + '" alt=""><span class="ppv-store">' + esc(window.store.name || window.store.id) + '</span><span class="ppv-x">✕</span></div>' +
-      '<div class="ppv-body"><p class="ppv-title">' + (d.show_bell ? '<span class="ppv-bell">🔔</span>' : '') + '<span>' + esc(d.title) + '</span></p>' +
-      (d.message ? '<p class="ppv-msg">' + esc(d.message) + '</p>' : '') + (d.badge_text ? '<div class="ppv-badge"><span>🎁</span>' + esc(d.badge_text) + '</div>' : '') + field +
-      '<div class="ppv-actions"><span class="ppv-allow">' + (d.show_bell ? '🔔 ' : '') + esc(d.allow_text) + '</span><span class="ppv-later">' + esc(d.later_text) + '</span></div>' +
-      (fine ? '<div class="ppv-fine">' + esc(fine) + '</div>' : '') + (d.show_brand ? '<div class="ppv-brand">Powered by Retner.ai</div>' : '') + '</div></div>';
+      '<div class="ppv-head ppv-' + header + '"><img class="ppv-logo" src="' + esc(logo) + '" alt=""><span class="ppv-store">' + esc(window.store.name || window.store.id) + '</span><span class="ppv-x">✕</span></div>' +
+      '<div class="ppv-body">' + body + '</div></div>';
   }
-  function previewHtml(d, storeLogo, mobile) {
+  function previewHtml(d, kind, storeLogo, mobile) {
     return '<div class="ppv-scope ' + (mobile ? 'phone' : 'frame') + '">' + (mobile ? '' : '<div class="ppv-bar"><i style="background:#f87171"></i><i style="background:#fbbf24"></i><i style="background:#34d399"></i><span class="url">🔒 ' + esc(window.store.id) + '.myshopify.com</span></div>') +
-      '<div class="ppv-stage" style="height:' + (mobile ? 520 : 360) + 'px"><div class="ppv-skel"><i></i><div><b></b><b></b><b></b></div></div>' + popupMarkup(d, storeLogo) + '</div></div>';
+      '<div class="ppv-stage" style="height:' + (mobile ? 520 : 360) + 'px"><div class="ppv-skel"><i></i><div><b></b><b></b><b></b></div></div>' + popupMarkup(d, kind, storeLogo) + '</div></div>';
   }
   loaders.popups = function () { if (!document.getElementById('rpCss')) { var st = document.createElement('style'); st.id = 'rpCss'; st.textContent = RP_CSS; document.head.appendChild(st); } loadPopups(); };
   function loadPopups() {
     api('/my-store/popup').then(function (r) {
       if (!r.ok || !r.data.success) { $('popupGallery').innerHTML = '<div class="muted">Could not load designs.</div>'; return; }
-      ppData = r.data; pp = r.data.settings; ppDirty = false;
+      ppData = r.data; ppDirty = false;
+      renderFlow(); renderGallery(); renderEditor(); setSaved(true);
       var nb = $('popupNotice'); nb.classList.toggle('hidden', !!r.data.saved);
       nb.innerHTML = '<i class="fas fa-circle-info"></i> No design chosen yet: your storefront shows the theme-editor popup. Pick any design below and it goes live within 5 minutes.';
-      renderGallery(); renderEditor();
     });
   }
+  function renderFlow() {
+    var p = ppData.push, l = ppData.lead;
+    var st1 = '<span class="st ' + (p.enabled ? 'on' : 'off') + '"><i class="fas fa-bell"></i> Subscribe popup · ' + (p.enabled ? p.delay + 's after page load' : 'off') + '</span>';
+    var st2 = '<span class="st ' + (l.enabled ? 'on' : 'off') + '"><i class="fas fa-address-card"></i> Lead popup · ' + (l.enabled ? (l.trigger === 'timer' ? l.delay + 's after page load' : l.trigger === 'second_page' ? 'on the 2nd page, +' + l.delay + 's' : l.delay + 's after the subscribe step') : 'off') + '</span>';
+    var hint = !p.enabled && !l.enabled ? 'Both popups are off: shoppers see nothing.' : (l.enabled && l.delay === 0 && l.trigger === 'after_push' ? 'Lead delay is 0: it opens the moment the subscribe popup closes.' : 'Never both at once. Each remembers its own answer.');
+    $('popupFlow').innerHTML = st1 + '<span class="arrow"><i class="fas fa-arrow-right"></i></span>' + st2 + '<span class="hint">' + hint + '</span>';
+  }
+  function setSaved(saved) { var b = $('popupSave'); b.disabled = saved; b.innerHTML = saved ? '<i class="fas fa-check"></i> Saved' : '<i class="fas fa-check"></i> Save changes'; var b2 = $('popupSave2'); if (b2) { b2.disabled = saved; } }
+  function markDirty() { ppDirty = true; setSaved(false); }
   function renderGallery() {
-    $('popupGallery').innerHTML = ppData.presets.map(function (p) {
-      var cur = pp.preset === p.key;
-      return '<div class="pp-card' + (cur ? ' current' : '') + '"><div class="pp-thumb"><div class="ppv-scope">' + popupMarkup(p.settings, ppData.store_logo) + '</div></div>' +
-        '<div class="row-between"><b>' + esc(p.name) + '</b>' + (cur ? '<span class="chip ok">In use</span>' : '<span class="chip">' + esc(p.settings.layout) + (p.settings.collect !== 'none' ? ' · leads' : '') + '</span>') + '</div>' +
-        '<span class="blurb">' + esc(p.blurb) + '</span><button class="btn sm' + (cur ? '' : ' primary') + '" data-preset="' + esc(p.key) + '"' + (cur ? ' disabled' : '') + '>' + (cur ? 'Current design' : 'Use this design') + '</button></div>';
+    var cur = pp(), list = ppData.presets[ppKind] || [];
+    $('popupGalleryTitle').textContent = ppKind === 'lead' ? 'Lead popup designs' : 'Subscribe popup designs';
+    $('popupGallery').innerHTML = list.map(function (p) {
+      var isCur = cur.preset === p.key;
+      return '<div class="pp-card' + (isCur ? ' current' : '') + '"><div class="pp-thumb"><div class="ppv-scope">' + popupMarkup(p.settings, ppKind, ppData.store_logo) + '</div></div>' +
+        '<div class="row-between"><b>' + esc(p.name) + '</b>' + (isCur ? '<span class="chip ok">In use</span>' : '<span class="chip">' + esc(p.settings.layout) + '</span>') + '</div>' +
+        '<span class="blurb">' + esc(p.blurb) + '</span><button class="btn sm' + (isCur ? '' : ' primary') + '" data-preset="' + esc(p.key) + '"' + (isCur ? ' disabled' : '') + '>' + (isCur ? 'Current design' : 'Use this design') + '</button></div>';
     }).join('');
   }
   function fld(label, key, type, extra) {
     extra = extra || {};
-    var v = pp[key] == null ? '' : pp[key];
-    if (type === 'select') return '<div class="field"><label>' + label + '</label><select class="input" data-pp="' + key + '">' + extra.options.map(function (o) { return '<option value="' + esc(o[0]) + '"' + (String(v) === String(o[0]) ? ' selected' : '') + '>' + esc(o[1]) + '</option>'; }).join('') + '</select></div>';
+    var v = pp()[key] == null ? '' : pp()[key];
+    if (type === 'select') return '<div class="field"><label>' + label + '</label><select class="input" data-pp="' + key + '">' + extra.options.map(function (o) { return '<option value="' + esc(o[0]) + '"' + (String(v) === String(o[0]) ? ' selected' : '') + '>' + esc(o[1]) + '</option>'; }).join('') + '</select>' + (extra.help ? '<div class="help">' + extra.help + '</div>' : '') + '</div>';
     if (type === 'check') return '<label class="row-between" style="margin-bottom:10px;"><span>' + label + '</span><input type="checkbox" data-pp="' + key + '"' + (v ? ' checked' : '') + '></label>';
     if (type === 'range') return '<div class="field"><label>' + label + ' · <b data-pp-val="' + key + '">' + esc(v) + '</b></label><input type="range" data-pp="' + key + '" min="' + extra.min + '" max="' + extra.max + '" value="' + esc(v) + '" style="width:100%"></div>';
     if (type === 'textarea') return '<div class="field"><label>' + label + '</label><textarea class="input" data-pp="' + key + '" maxlength="' + (extra.max || 160) + '" rows="2">' + esc(v) + '</textarea></div>';
     return '<div class="field"><label>' + label + '</label><input class="input" data-pp="' + key + '" maxlength="' + (extra.max || 60) + '" value="' + esc(v) + '" placeholder="' + esc(extra.ph || '') + '"></div>';
   }
+  var COLORS = '<div class="field"><label>Colours</label><div class="pp-colors"><div><input type="color" data-pp="accent" value="__A__"><div class="help">Brand</div></div><div><input type="color" data-pp="bg" value="__B__"><div class="help">Background</div></div><div><input type="color" data-pp="text" value="__T__"><div class="help">Text</div></div></div></div>';
   function renderEditor() {
-    var sheetish = pp.layout === 'sheet' || pp.layout === 'center';
-    $('popupEditor').innerHTML = '<div class="card"><h3>Make it yours</h3>' +
-      fld('Layout', 'layout', 'select', { options: [['corner', 'Corner card'], ['center', 'Centered'], ['topbar', 'Top bar'], ['sheet', 'Offer sheet (full-screen on phones)']] }) +
-      (pp.layout === 'corner' ? fld('Corner', 'position', 'select', { options: [['right', 'Bottom right'], ['left', 'Bottom left']] }) : '') +
-      '<div class="field"><label>Colours</label><div class="pp-colors"><div><input type="color" data-pp="accent" value="' + esc(pp.accent) + '"><div class="help">Brand</div></div><div><input type="color" data-pp="bg" value="' + esc(pp.bg) + '"><div class="help">Background</div></div><div><input type="color" data-pp="text" value="' + esc(pp.text) + '"><div class="help">Text</div></div></div></div>' +
-      (pp.layout !== 'topbar' && pp.layout !== 'sheet' ? fld('Header', 'header', 'select', { options: [['band', 'Brand colour band'], ['gradient', 'Gradient band'], ['none', 'No band']] }) : '') +
-      fld('Corner roundness (px)', 'radius', 'range', { min: 0, max: 32 }) +
-      '<h3 style="margin-top:18px">Collect phone &amp; email</h3><p class="sub">Ask for a contact before the browser prompt. The lead is saved even if notifications are blocked (iPhone, in-app browsers), and shows in Contacts.</p>' +
-      fld('Ask for', 'collect', 'select', { options: [['none', 'Nothing (push only)'], ['phone', 'Phone number'], ['email', 'Email'], ['either', 'Phone or email']] }) +
-      (pp.collect !== 'none' ? fld('Required before continuing', 'collect_required', 'check') + fld('Consent text (shown with a tick)', 'consent_text', 'text', { max: 120 }) + fld('Default country', 'country', 'select', { options: [['IN', 'India (+91)'], ['US', 'United States (+1)'], ['GB', 'United Kingdom (+44)'], ['AE', 'UAE (+971)'], ['SG', 'Singapore (+65)'], ['AU', 'Australia (+61)']] }) + fld('Reward code shown after', 'reward_code', 'text', { max: 40, ph: 'WELCOME5' }) : '') +
-      '<h3 style="margin-top:18px">Text</h3>' + fld('Title', 'title', 'text') + fld('Message', 'message', 'textarea') +
-      '<div class="pp-colors" style="grid-template-columns:1fr 1fr">' + fld('Allow button', 'allow_text', 'text', { max: 30 }) + fld('Later button', 'later_text', 'text', { max: 20 }) + '</div>' +
-      fld('Offer badge (optional)', 'badge_text', 'text') +
-      (pp.layout === 'sheet' ? fld('Top ribbon (optional)', 'ribbon_text', 'text', { max: 40, ph: 'Get up to 60% off' }) : '') +
-      (sheetish && pp.collect === 'none' ? fld('Fine print under the button', 'fine_print', 'text', { max: 90 }) : '') +
-      (sheetish ? '<h3 style="margin-top:18px">After they allow</h3>' + fld('Success title', 'success_title', 'text', { max: 50 }) + fld('Success message (put the code here)', 'success_message', 'text', { max: 120 }) + fld('Success button', 'success_button', 'text', { max: 24 }) : '') +
-      '<h3 style="margin-top:18px">Logo &amp; timing</h3><div class="field"><label>Logo in the popup</label><input type="hidden" id="ppLogo" value="' + esc(pp.logo_url || '') + '"><div data-media-for="ppLogo" data-purpose="logo" data-max-side="512" data-hint="empty = your store logo"></div></div>' +
-      fld('Show after (seconds on the page)', 'delay', 'range', { min: 0, max: 60 }) + fld('"Later" hides it for (days)', 'later_days', 'range', { min: 0, max: 30 }) +
-      fld('Animated bell', 'show_bell', 'check') + fld('Show "Powered by Retner.ai"', 'show_brand', 'check') +
-      '<button class="btn primary block" id="popupSave2"' + (ppDirty ? '' : ' disabled') + '><i class="fas fa-check"></i> Save changes</button></div>' +
-      '<div class="pp-preview-wrap"><div class="card"><div class="card-head"><h3>Live preview</h3><div class="seg pp-device"><button data-dev="desktop"' + (ppMobile ? '' : ' class="active"') + '>Desktop</button><button data-dev="phone"' + (ppMobile ? ' class="active"' : '') + '>Phone</button></div></div><div id="ppPreview">' + previewHtml(pp, ppData.store_logo, ppMobile) + '</div><p class="sub" style="margin-top:10px">On phones every layout opens as a sheet from the bottom. When "Ask for" is on, the shopper types the number first, then the browser asks for notification permission.</p></div></div>';
+    var d = pp(), html;
+    var colors = COLORS.replace('__A__', esc(d.accent)).replace('__B__', esc(d.bg)).replace('__T__', esc(d.text));
+    if (ppKind === 'push') {
+      html = '<div class="card"><h3>Subscribe popup</h3>' + fld('Show the subscribe popup', 'enabled', 'check') +
+        fld('Layout', 'layout', 'select', { options: [['corner', 'Corner card'], ['center', 'Centered'], ['topbar', 'Top bar']] }) +
+        (d.layout === 'corner' ? fld('Corner', 'position', 'select', { options: [['right', 'Bottom right'], ['left', 'Bottom left']] }) : '') + colors +
+        (d.layout !== 'topbar' ? fld('Header', 'header', 'select', { options: [['band', 'Brand colour band'], ['gradient', 'Gradient band'], ['none', 'No band']] }) : '') +
+        fld('Corner roundness (px)', 'radius', 'range', { min: 0, max: 32 }) +
+        '<h3 style="margin-top:18px">Text</h3>' + fld('Title', 'title', 'text') + fld('Message', 'message', 'textarea') +
+        '<div class="pp-colors" style="grid-template-columns:1fr 1fr">' + fld('Allow button', 'allow_text', 'text', { max: 30 }) + fld('Later button', 'later_text', 'text', { max: 20 }) + '</div>' +
+        fld('Offer badge (optional)', 'badge_text', 'text') + (d.layout === 'center' ? fld('Fine print under the button', 'fine_print', 'text', { max: 90 }) : '') +
+        '<h3 style="margin-top:18px">Logo &amp; timing</h3><div class="field"><label>Logo in the popup</label><input type="hidden" id="ppLogo" value="' + esc(d.logo_url || '') + '"><div data-media-for="ppLogo" data-purpose="logo" data-max-side="512" data-hint="empty = your store logo"></div></div>' +
+        fld('Show after (seconds on the page)', 'delay', 'range', { min: 0, max: 60 }) + fld('"Later" hides it for (days)', 'later_days', 'range', { min: 0, max: 30 }) +
+        fld('Animated bell', 'show_bell', 'check') + fld('Show "Powered by Retner.ai"', 'show_brand', 'check') +
+        '<p class="sub">To skip this popup and show the browser prompt directly, turn on "Skip the custom popup" in Settings.</p>';
+    } else {
+      html = '<div class="card"><h3>Lead popup</h3>' + fld('Show the lead popup', 'enabled', 'check') +
+        '<p class="sub">Asks for a phone number or email, separately from the subscribe popup. The lead is saved in Contacts even when notifications are blocked.</p>' +
+        '<h3 style="margin-top:14px">When</h3>' + fld('Trigger', 'trigger', 'select', { options: [['after_push', 'After the subscribe step'], ['timer', 'On its own timer (after page load)'], ['second_page', 'On the 2nd page of the visit']], help: 'After the subscribe step = when the visitor answered, closed or skipped the subscribe popup (also works with the browser prompt).' }) +
+        fld('Delay (seconds)', 'delay', 'range', { min: 0, max: 120 }) + fld('Pages', 'pages', 'select', { options: [['all', 'All pages'], ['product', 'Product pages'], ['cart', 'Cart page'], ['product_cart', 'Product + cart pages']] }) +
+        fld('"No thanks" hides it for (days)', 'later_days', 'range', { min: 0, max: 30 }) + fld('Maximum times per visitor', 'max_shows', 'range', { min: 1, max: 20 }) +
+        '<h3 style="margin-top:18px">What to collect</h3>' + fld('Ask for', 'collect', 'select', { options: [['phone', 'Phone number'], ['email', 'Email'], ['either', 'Phone or email']] }) +
+        fld('Required before continuing', 'required', 'check') + fld('Consent text (with a tick)', 'consent_text', 'text', { max: 120 }) +
+        fld('Default country', 'country', 'select', { options: [['IN', 'India (+91)'], ['US', 'United States (+1)'], ['GB', 'United Kingdom (+44)'], ['AE', 'UAE (+971)'], ['SG', 'Singapore (+65)'], ['AU', 'Australia (+61)']] }) +
+        fld('Reward code shown after', 'reward_code', 'text', { max: 40, ph: 'WELCOME5' }) +
+        '<h3 style="margin-top:18px">Look</h3>' + fld('Layout', 'layout', 'select', { options: [['sheet', 'Offer sheet (full-screen on phones)'], ['center', 'Centered'], ['corner', 'Corner card'], ['topbar', 'Top bar']] }) +
+        (d.layout === 'corner' ? fld('Corner', 'position', 'select', { options: [['right', 'Bottom right'], ['left', 'Bottom left']] }) : '') + colors + fld('Corner roundness (px)', 'radius', 'range', { min: 0, max: 32 }) +
+        (d.layout === 'sheet' ? fld('Top ribbon (optional)', 'ribbon_text', 'text', { max: 40, ph: 'Get up to 60% off' }) : '') +
+        '<div class="field"><label>Logo in the popup</label><input type="hidden" id="ppLogo" value="' + esc(d.logo_url || '') + '"><div data-media-for="ppLogo" data-purpose="logo" data-max-side="512" data-hint="empty = your store logo"></div></div>' +
+        '<h3 style="margin-top:18px">Text</h3>' + fld('Title', 'title', 'text') + fld('Message (optional)', 'message', 'textarea') +
+        '<div class="pp-colors" style="grid-template-columns:1fr 1fr">' + fld('Button', 'button_text', 'text', { max: 30 }) + fld('Skip link', 'skip_text', 'text', { max: 20 }) + '</div>' +
+        '<h3 style="margin-top:18px">After they submit</h3>' + fld('Success title', 'success_title', 'text', { max: 50 }) + fld('Success message', 'success_message', 'text', { max: 120 }) + fld('Success button', 'success_button', 'text', { max: 24 }) +
+        fld('Show "Powered by Retner.ai"', 'show_brand', 'check');
+    }
+    html += '<button class="btn primary block" id="popupSave2"' + (ppDirty ? '' : ' disabled') + '><i class="fas fa-check"></i> Save changes</button></div>' +
+      '<div class="pp-preview-wrap"><div class="card"><div class="card-head"><h3>Live preview</h3><div class="seg pp-device"><button data-dev="desktop"' + (ppMobile ? '' : ' class="active"') + '>Desktop</button><button data-dev="phone"' + (ppMobile ? ' class="active"' : '') + '>Phone</button></div></div><div id="ppPreview">' + previewHtml(d, ppKind, ppData.store_logo, ppMobile) + '</div><p class="sub" style="margin-top:10px">' + (ppKind === 'lead' ? 'Shown after the subscribe step. On phones it opens as a sheet from the bottom; the number is saved before anything else happens.' : 'On phones every layout opens as a sheet from the bottom. Allow opens the browser\'s own permission prompt.') + '</p></div></div>';
+    $('popupEditor').innerHTML = html;
     if (window.RetnerMedia) window.RetnerMedia.attachAll($('popupEditor'));
-    $('ppLogo').addEventListener('change', function () { pp.logo_url = $('ppLogo').value; markDirty(); refreshPreview(); });
+    $('ppLogo').addEventListener('change', function () { pp().logo_url = $('ppLogo').value; markDirty(); refreshPreview(); });
   }
-  function refreshPreview() { var el = $('ppPreview'); if (el) el.innerHTML = previewHtml(pp, ppData.store_logo, ppMobile); }
-  function markDirty() { ppDirty = true; var b1 = $('popupSave'), b2 = $('popupSave2'); [b1, b2].forEach(function (b) { if (b) { b.disabled = false; b.innerHTML = '<i class="fas fa-check"></i> Save changes'; } }); }
-  var RERENDER = { layout: 1, collect: 1 };
+  function refreshPreview() { var el = $('ppPreview'); if (el) el.innerHTML = previewHtml(pp(), ppKind, ppData.store_logo, ppMobile); }
+  var RERENDER = { layout: 1, collect: 1, enabled: 1, trigger: 1 };
+  $('popupKind').addEventListener('click', function (e) {
+    var b = e.target.closest('[data-kind]'); if (!b) return;
+    if (ppDirty && !window.confirm('You have unsaved changes on this popup. Switch anyway?')) return;
+    ppKind = b.getAttribute('data-kind'); ppDirty = false;
+    document.querySelectorAll('#popupKind button').forEach(function (x) { x.classList.toggle('active', x === b); });
+    renderGallery(); renderEditor(); setSaved(true);
+  });
   $('popupEditor').addEventListener('input', function (e) {
     var el = e.target.closest('[data-pp]'); if (!el) return;
     var key = el.getAttribute('data-pp');
-    pp[key] = el.type === 'checkbox' ? el.checked : (el.type === 'range' ? Number(el.value) : el.value);
+    pp()[key] = el.type === 'checkbox' ? el.checked : (el.type === 'range' ? Number(el.value) : el.value);
     var lab = $('popupEditor').querySelector('[data-pp-val="' + key + '"]'); if (lab) lab.textContent = el.value;
-    markDirty();
+    markDirty(); renderFlow();
     if (RERENDER[key]) renderEditor(); else refreshPreview();
   });
   $('popupEditor').addEventListener('click', function (e) {
@@ -922,20 +968,23 @@
   $('popupSave').addEventListener('click', savePopup);
   function savePopup() {
     var b = $('popupSave'); b.disabled = true; b.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Saving…';
-    api('/my-store/popup', { method: 'POST', body: pp }).then(function (r) {
-      if (!r.ok || !r.data.success) { b.disabled = false; b.innerHTML = '<i class="fas fa-check"></i> Save changes'; return toast(r.data.error || 'Could not save.', 'err'); }
-      pp = r.data.settings; ppDirty = false; ppData.saved = true; $('popupNotice').classList.add('hidden');
-      b.innerHTML = '<i class="fas fa-check"></i> Saved'; renderGallery(); renderEditor();
-      toast('Saved. Shoppers see the new popup within 5 minutes.', 'ok');
+    var body = {}; body[ppKind] = pp();
+    api('/my-store/popup', { method: 'POST', body: body }).then(function (r) {
+      if (!r.ok || !r.data.success) { setSaved(false); return toast(r.data.error || 'Could not save.', 'err'); }
+      ppData.push = r.data.push; ppData.lead = r.data.lead; ppDirty = false; ppData.saved = true; $('popupNotice').classList.add('hidden');
+      renderFlow(); renderGallery(); renderEditor(); setSaved(true);
+      toast('Saved. Shoppers see the change within 5 minutes.', 'ok');
     });
   }
   $('popupGallery').addEventListener('click', function (e) {
     var b = e.target.closest('[data-preset]'); if (!b) return;
     b.disabled = true; b.innerHTML = '<i class="fas fa-spinner fa-spin"></i> Applying…';
-    api('/my-store/popup', { method: 'POST', body: { apply_preset: b.getAttribute('data-preset') } }).then(function (r) {
+    var body = { apply_preset: { kind: ppKind, key: b.getAttribute('data-preset') } };
+    if (ppKind === 'lead' && !pp().enabled) body.lead = { enabled: true };
+    api('/my-store/popup', { method: 'POST', body: body }).then(function (r) {
       if (!r.ok || !r.data.success) { b.disabled = false; b.textContent = 'Use this design'; return toast(r.data.error || 'Could not apply.', 'err'); }
-      pp = r.data.settings; ppDirty = false; ppData.saved = true; $('popupNotice').classList.add('hidden'); $('popupSave').innerHTML = '<i class="fas fa-check"></i> Saved'; $('popupSave').disabled = true;
-      renderGallery(); renderEditor(); toast('Design applied. It is live on your storefront within 5 minutes.', 'ok');
+      ppData.push = r.data.push; ppData.lead = r.data.lead; ppDirty = false; ppData.saved = true; $('popupNotice').classList.add('hidden');
+      renderFlow(); renderGallery(); renderEditor(); setSaved(true); toast('Design applied' + (ppKind === 'lead' ? ' and the lead popup is on' : '') + '. Live within 5 minutes.', 'ok');
     });
   });
 

@@ -11,14 +11,14 @@
   <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.1/dist/chart.umd.min.js"></script>
   <link rel="stylesheet" href="/css/automations.css?v=3">
   <link rel="stylesheet" href="/css/dashboard.css?v=5">
-  <link rel="stylesheet" href="/app/app.css?v=10">
+  <link rel="stylesheet" href="/app/app.css?v=11">
   <script>window.__RETNER_STORE__ = "__RETNER_STORE_JSON__";</script>
   <script src="/js/automations.js?v=4" defer></script>
   <script src="/js/media.js?v=2" defer></script>
   <script src="/js/analytics.js?v=2" defer></script>
   <script src="/js/campaign-preview.js?v=2" defer></script>
   <script src="/js/campaigns.js?v=2" defer></script>
-  <script src="/app/app.js?v=11" defer></script>
+  <script src="/app/app.js?v=12" defer></script>
 </head>
 <body>
   <!-- LOGIN -->
@@ -374,12 +374,14 @@
         <!-- POPUPS -->
         <section class="view" id="view-popups">
           <div class="page-head">
-            <div><h1>Popups</h1><p>The subscribe popup shoppers see on your storefront. Pick a design, decide whether it also asks for a phone number or email, make it yours, save.</p></div>
+            <div><h1>Popups</h1><p>Two popups on your storefront: the <b>Subscribe popup</b> asks for notification permission; the <b>Lead popup</b> asks for a phone number or email a few seconds later. Each has its own designs, text and timing.</p></div>
             <div class="head-actions"><button class="btn primary" id="popupSave" disabled><i class="fas fa-check"></i> Saved</button></div>
           </div>
+          <div class="pp-flow" id="popupFlow"></div>
+          <div class="tabs pp-tabs" id="popupKind"><button data-kind="push" class="active"><i class="fas fa-bell"></i> Subscribe popup</button><button data-kind="lead"><i class="fas fa-address-card"></i> Lead popup</button></div>
           <div class="ok-box hidden" id="popupNotice" style="margin-bottom:16px;"></div>
-          <h2 class="section-title" style="margin-top:0;">Ready designs</h2>
-          <p class="muted" style="margin:-8px 0 14px;">One click applies the layout, colours and copy. Your logo, timing and brand line are kept.</p>
+          <h2 class="section-title" style="margin-top:0;" id="popupGalleryTitle">Ready designs</h2>
+          <p class="muted" style="margin:-8px 0 14px;">One click applies the layout, colours and copy. Your logo, timing and settings are kept.</p>
           <div class="pp-gallery" id="popupGallery"><div class="muted">Loading designs…</div></div>
           <div class="pp-editor" id="popupEditor"></div>
         </section>

@@ -687,14 +687,14 @@ app.post('/my-store/upgrade-request', async (req, res) => {
 app.get('/my-store/popup', async (req, res) => {
     try {
         const r = await popups.get(getPool(), req.storeId);
-        res.json({ success: true, settings: r.effective, saved: r.saved, store_logo: r.store_logo, presets: popups.publicPresets(), defaults: popups.DEFAULTS });
+        res.json({ success: true, push: r.push, lead: r.lead, saved: r.saved, store_logo: r.store_logo, presets: popups.publicPresets(), defaults: { push: popups.PUSH_DEFAULTS, lead: popups.LEAD_DEFAULTS } });
     } catch (e) { console.error('Popup get error:', e.message); res.status(500).json({ success: false, error: 'Could not load the popup design' }); }
 });
-// Body: full settings, or { apply_preset: "<key>" } to switch design in one click.
+// Body: { push: {...} } and/or { lead: {...} }, or { apply_preset: { kind, key } } to switch a design in one click.
 app.post('/my-store/popup', async (req, res) => {
     try {
         const settings = await popups.save(getPool(), req.storeId, req.body || {});
-        res.json({ success: true, settings });
+        res.json({ success: true, push: settings.push, lead: settings.lead });
     } catch (e) { console.error('Popup save error:', e.message); res.status(e.status || 500).json({ success: false, error: e.status ? e.message : 'Could not save the popup design' }); }
 });
 
