@@ -18,6 +18,7 @@ const usage = require('./usage');
 const plans = require('./plans');
 const entitlements = require('./entitlements');
 const tips = require('./tips');
+const popups = require('./popups');
 
 const app = express();
 
@@ -659,6 +660,21 @@ app.post('/my-store/upgrade-request', async (req, res) => {
         console.error('Upgrade request error:', e.message);
         res.status(500).json({ success: false, error: 'Could not send your request. Please try again.' });
     }
+});
+
+// Storefront popup design (see popups.js): current settings + the design gallery.
+app.get('/my-store/popup', async (req, res) => {
+    try {
+        const r = await popups.get(getPool(), req.storeId);
+        res.json({ success: true, settings: r.effective, saved: r.saved, store_logo: r.store_logo, presets: popups.publicPresets(), defaults: popups.DEFAULTS });
+    } catch (e) { console.error('Popup get error:', e.message); res.status(500).json({ success: false, error: 'Could not load the popup design' }); }
+});
+// Body: full settings, or { apply_preset: "<key>" } to switch design in one click.
+app.post('/my-store/popup', async (req, res) => {
+    try {
+        const settings = await popups.save(getPool(), req.storeId, req.body || {});
+        res.json({ success: true, settings });
+    } catch (e) { console.error('Popup save error:', e.message); res.status(e.status || 500).json({ success: false, error: e.status ? e.message : 'Could not save the popup design' }); }
 });
 
 // Ideas feed (see tips.js): ?surface=home|loading|creator|app, ?n=1..6
