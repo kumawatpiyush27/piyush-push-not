@@ -5,7 +5,7 @@
 // the Shopify app's /apps/push/config, so the theme editor settings are only
 // a fallback for stores that never saved a design.
 
-const LAYOUTS = ['corner', 'center', 'topbar'];
+const LAYOUTS = ['corner', 'center', 'topbar', 'sheet'];
 const POSITIONS = ['right', 'left'];
 
 const DEFAULTS = {
@@ -14,6 +14,8 @@ const DEFAULTS = {
     title: 'Stay updated! 🔔', message: 'Subscribe for exclusive deals, restocks and flash sales.',
     allow_text: 'Allow notifications', later_text: 'Later', badge_text: 'Subscribers get early access to sales!',
     show_bell: true, show_brand: true, delay: 5, later_days: 1, logo_url: '',
+    // sheet / center extras
+    ribbon_text: '', fine_print: '', success_title: "You're in! 🎉", success_message: 'Watch for our next offer on this device.', success_button: 'Continue',
 };
 
 // Each preset is a full look; the merchant's brand colour/logo/text can
@@ -33,6 +35,8 @@ const PRESETS = [
       values: { layout: 'corner', accent: '#ec4899', bg: '#fff7fb', text: '#3b0a2a', header: 'gradient', radius: 18, show_bell: true, title: 'Festive deals are coming 🎉', message: 'Be first to know about the biggest offers of the season.', badge_text: 'Subscribers get the best prices first' } },
     { key: 'luxe', name: 'Luxe', blurb: 'Black and gold, quiet typography. Jewellery, beauty, decor.', tags: ['center', 'dark'],
       values: { layout: 'center', accent: '#d4af37', bg: '#0b0b0b', text: '#f5f1e6', header: 'none', radius: 8, show_bell: false, title: 'Private previews', message: 'New collections and members-only prices, before anyone else.', badge_text: '', allow_text: 'Join the list', later_text: 'Not now' } },
+    { key: 'unlock', name: 'Unlock offers', blurb: 'Full-screen sheet on phones: ribbon, big logo, one button, then a code. The lead-capture look.', tags: ['sheet', 'offer', 'mobile'],
+      values: { layout: 'sheet', accent: '#111827', bg: '#ffffff', text: '#111827', header: 'none', radius: 24, show_bell: false, title: 'Unlock exclusive offers 👇', message: '', badge_text: '', allow_text: 'Get mystery offer', later_text: 'No thanks', ribbon_text: 'Get up to 60% off', fine_print: 'Keep me posted about sales and offers', success_title: 'Join the tribe', success_message: 'Use WELCOME5 for 5% off your first order', success_button: 'Continue' } },
     { key: 'fresh', name: 'Fresh', blurb: 'Mint and white, bottom-left. Food, wellness, kids.', tags: ['corner', 'light'],
       values: { layout: 'corner', position: 'left', accent: '#10b981', bg: '#f0fdf4', text: '#064e3b', header: 'band', radius: 20, show_bell: true, title: 'Fresh drops and restocks 🌱', message: 'One tap and you never miss a restock again.' } },
 ];
@@ -64,6 +68,11 @@ function normalize(input, base) {
         show_bell: bool(i.show_bell, b.show_bell), show_brand: bool(i.show_brand, b.show_brand),
         delay: num(i.delay, b.delay, 0, 60), later_days: num(i.later_days, b.later_days, 0, 30),
         logo_url: i.logo_url !== undefined ? (/^https:\/\/.{3,490}$/.test(String(i.logo_url || '')) ? String(i.logo_url) : '') : b.logo_url,
+        ribbon_text: i.ribbon_text !== undefined ? clamp(i.ribbon_text, 40) : b.ribbon_text,
+        fine_print: i.fine_print !== undefined ? clamp(i.fine_print, 90) : b.fine_print,
+        success_title: i.success_title !== undefined ? clamp(i.success_title, 50) : b.success_title,
+        success_message: i.success_message !== undefined ? clamp(i.success_message, 120) : b.success_message,
+        success_button: i.success_button !== undefined ? (clamp(i.success_button, 24) || DEFAULTS.success_button) : b.success_button,
     };
     if (!out.title) out.title = DEFAULTS.title;
     return out;
