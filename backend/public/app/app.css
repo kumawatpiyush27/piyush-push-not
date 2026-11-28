@@ -350,7 +350,7 @@ table.tbl tr:last-child td { border-bottom: 0; }
 .pp-card { background: var(--surface); border: 1.5px solid var(--border-2); border-radius: var(--r); padding: 12px; display: flex; flex-direction: column; gap: 8px; }
 .pp-card.current { border-color: var(--primary); }
 .pp-thumb { position: relative; height: 150px; border-radius: 10px; overflow: hidden; background: linear-gradient(180deg, #fafafa, #eceff3); }
-.pp-thumb .rp-scope { position: absolute; inset: 0; transform: scale(.6); transform-origin: top left; width: 166%; height: 166%; }
+.pp-thumb .ppv-scope { position: absolute; inset: 0; transform: scale(.6); transform-origin: top left; width: 166%; height: 166%; }
 .pp-card b { font-size: 14px; } .pp-card span.blurb { font-size: 12.5px; color: var(--muted); }
 .pp-editor { display: grid; grid-template-columns: minmax(0, 380px) minmax(0, 1fr); gap: 20px; align-items: start; }
 .pp-editor .field { margin-bottom: 12px; }
@@ -358,16 +358,16 @@ table.tbl tr:last-child td { border-bottom: 0; }
 .pp-colors input[type=color] { width: 100%; height: 34px; border: 1px solid var(--border); border-radius: 8px; padding: 2px; background: #fff; }
 .pp-preview-wrap { position: sticky; top: 12px; }
 .pp-device { display: flex; gap: 6px; }
-.rp-scope { position: relative; overflow: hidden; background: #fff; }
-.rp-scope.frame { border: 1px solid #e5e7eb; border-radius: 14px; box-shadow: 0 8px 30px rgba(17,24,39,.08); }
-.rp-scope.phone { width: 300px; margin: 0 auto; border-radius: 28px; border: 8px solid #111827; }
-.rp-bar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: #f3f4f6; border-bottom: 1px solid #e5e7eb; }
-.rp-bar i { width: 10px; height: 10px; border-radius: 5px; display: inline-block; }
-.rp-bar .url { flex: 1; margin-left: 8px; background: #fff; border: 1px solid #e5e7eb; border-radius: 999px; padding: 4px 12px; font-size: 12px; color: #6b7280; }
-.rp-stage { position: relative; background: linear-gradient(180deg, #fafafa, #f3f4f6); overflow: hidden; }
-.rp-skel { position: absolute; inset: 0; padding: 18px; opacity: .55; }
-.rp-skel i { display: block; height: 14px; width: 40%; background: #e5e7eb; border-radius: 7px; margin-bottom: 14px; }
-.rp-skel div { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; } .rp-skel div b { display: block; height: 90px; background: #e5e7eb; border-radius: 10px; }
+.ppv-scope { position: relative; overflow: hidden; background: #fff; }
+.ppv-scope.frame { border: 1px solid #e5e7eb; border-radius: 14px; box-shadow: 0 8px 30px rgba(17,24,39,.08); }
+.ppv-scope.phone { width: 300px; margin: 0 auto; border-radius: 28px; border: 8px solid #111827; }
+.ppv-bar { display: flex; align-items: center; gap: 8px; padding: 8px 12px; background: #f3f4f6; border-bottom: 1px solid #e5e7eb; }
+.ppv-bar i { width: 10px; height: 10px; border-radius: 5px; display: inline-block; }
+.ppv-bar .url { flex: 1; margin-left: 8px; background: #fff; border: 1px solid #e5e7eb; border-radius: 999px; padding: 4px 12px; font-size: 12px; color: #6b7280; }
+.ppv-stage { position: relative; background: linear-gradient(180deg, #fafafa, #f3f4f6); overflow: hidden; }
+.ppv-skel { position: absolute; inset: 0; padding: 18px; opacity: .55; }
+.ppv-skel i { display: block; height: 14px; width: 40%; background: #e5e7eb; border-radius: 7px; margin-bottom: 14px; }
+.ppv-skel div { display: grid; grid-template-columns: repeat(3, 1fr); gap: 10px; } .ppv-skel div b { display: block; height: 90px; background: #e5e7eb; border-radius: 10px; }
 @media (max-width: 1100px) { .pp-editor { grid-template-columns: minmax(0, 1fr); } .pp-preview-wrap { position: static; } }
 
 /* ---------- settings ---------- */
